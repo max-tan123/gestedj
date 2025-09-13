@@ -392,7 +392,7 @@ class HandDetectorWithMIDI:
                     elif delta_angle < -180:
                         delta_angle += 360
                     
-                    scaled_delta = (135.0 / 25.0) * delta_angle
+                    scaled_delta = (135.0 / 50.0) * delta_angle
                     new_value = self.knobs[target_knob] + scaled_delta
                     self.knobs[target_knob] = max(-135.0, min(135.0, new_value))
                     

@@ -392,7 +392,7 @@ class OptimizedHandDetector:
                         delta_angle += 360
                     
                     # Scale delta
-                    scaled_delta = (135.0 / 25.0) * delta_angle
+                    scaled_delta = (135.0 / 50.0) * delta_angle
                     
                     # Add to current knob value
                     new_value = self.knobs[target_knob] + scaled_delta
