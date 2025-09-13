@@ -62,6 +62,63 @@
                     <toggle/>
                 </options>
             </control>
+
+            <!-- Controls for Deck 2 (Channel 2) using dedicated CCs on MIDI Channel 2 (status 0xB1) -->
+            <!-- Filter Control Deck 2 -->
+            <control>
+                <group>[QuickEffectRack1_[Channel2]]</group>
+                <key>super1</key>
+                <description>Filter control Deck 2 (1 finger)</description>
+                <status>0xB1</status>
+                <midino>0x05</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Low EQ Control Deck 2 -->
+            <control>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter1</key>
+                <description>Low EQ control Deck 2 (2 fingers)</description>
+                <status>0xB1</status>
+                <midino>0x06</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Mid EQ Control Deck 2 -->
+            <control>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter2</key>
+                <description>Mid EQ control Deck 2 (3 fingers)</description>
+                <status>0xB1</status>
+                <midino>0x07</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- High EQ Control Deck 2 -->
+            <control>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter3</key>
+                <description>High EQ control Deck 2 (4 fingers)</description>
+                <status>0xB1</status>
+                <midino>0x08</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Toggle for Play/Pause on Channel 2 -->
+            <control>
+                <group>[Channel2]</group>
+                <key>play</key>
+                <description>Toggle Play/Pause Deck 2</description>
+                <status>0xB1</status>
+                <midino>0x13</midino> <!-- CC 19 -->
+                <options>
+                    <toggle/>
+                </options>
+            </control>
         </controls>
         <outputs>
             <!-- Feedback for Filter (CC 1 on Channel 2) -->
@@ -121,9 +178,77 @@
                 <off>0x00</off>
                 <maximum>0.9</maximum>
             </output>
-            <!-- Feedback for Play/Pause Status -->
+            <!-- Feedback for Play/Pause Status Deck 1 -->
             <output>
                 <group>[Channel1]</group>
+                <key>play</key>
+                <status>0xB1</status>
+                <midino>0x12</midino> <!-- CC 18 -->
+                <on>0x7F</on>
+                <off>0x00</off>
+            </output>
+
+            <!-- Feedback for Deck 2 using MIDI Channel 2 (status 0xB1) back to our controller on channel 2 -->
+            <!-- Filter Feedback Deck 2 -->
+            <output>
+                <group>[QuickEffectRack1_[Channel2]]</group>
+                <key>super1</key>
+                <status>0xB1</status>
+                <midino>0x01</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>0.51</minimum>
+            </output>
+            <output>
+                <group>[QuickEffectRack1_[Channel2]]</group>
+                <key>super1</key>
+                <status>0xB1</status>
+                <midino>0x01</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.49</maximum>
+            </output>
+            <!-- Low EQ Feedback Deck 2 -->
+            <output>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter1</key>
+                <status>0xB1</status>
+                <midino>0x02</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>1.1</minimum>
+            </output>
+            <output>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter1</key>
+                <status>0xB1</status>
+                <midino>0x02</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.9</maximum>
+            </output>
+            <!-- Mid EQ Feedback Deck 2 -->
+            <output>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter2</key>
+                <status>0xB1</status>
+                <midino>0x03</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>1.1</minimum>
+            </output>
+            <output>
+                <group>[EqualizerRack1_[Channel2]_Effect1]</group>
+                <key>parameter2</key>
+                <status>0xB1</status>
+                <midino>0x03</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.9</maximum>
+            </output>
+            <!-- Play/Pause Feedback Deck 2 -->
+            <output>
+                <group>[Channel2]</group>
                 <key>play</key>
                 <status>0xB1</status>
                 <midino>0x12</midino> <!-- CC 18 -->

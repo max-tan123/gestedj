@@ -25,13 +25,15 @@ class VirtualMIDIDevice:
         
         self.debug_print_thread = None
 
-        # MIDI Configuration for Mixxx
-        self.midi_config = {
-            # EQ Controls (using CC messages on channel 1)
-            'filter': {'channel': 0, 'cc': 1, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
-            'low':    {'channel': 0, 'cc': 2, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
-            'mid':    {'channel': 0, 'cc': 3, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
-            'high':   {'channel': 0, 'cc': 4, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+        # MIDI Configuration for Mixxx (deck-specific CCs)
+        self.midi_control_config = {
+            'filter': {'cc1': 1, 'cc2': 5, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
+            'low':    {'cc1': 2, 'cc2': 6, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+            'mid':    {'cc1': 3, 'cc2': 7, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+            'high':   {'cc1': 4, 'cc2': 8, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+        }
+        self.midi_toggle_config = {
+            'play':   {'cc1': 0x12, 'cc2': 0x13, 'toggle_value': 127},
         }
         
         # Last sent values to avoid duplicate messages
@@ -39,7 +41,8 @@ class VirtualMIDIDevice:
             'filter': None,
             'low': None,
             'mid': None,
-            'high': None
+            'high': None,
+            'play': None
         }
         
         # Value smoothing
@@ -50,6 +53,11 @@ class VirtualMIDIDevice:
             'mid': 0.0,
             'high': 0.0
         }
+        # Per-channel smoothing to prevent cross-deck coupling
+        self.smoothed_values_by_channel = {}
+        
+        # Per-channel last-sent tracking (used for multi-deck updates)
+        self.last_sent_values_by_channel = {}
         
         self.init_midi()
     
@@ -84,11 +92,15 @@ class VirtualMIDIDevice:
         """Close MIDI device"""
         self.running = False
         if self.midi_out:
-            # Set all controls to default on exit
-            for control_name, config in self.midi_config.items():
+            # Set all controls to default on exit (both decks)
+            for control_name, config in self.midi_control_config.items():
                 default_midi_val = self.value_to_midi(control_name, config['default'])
-                self.send_control_change(config['channel'], config['cc'], default_midi_val)
-                time.sleep(0.05)
+                # Deck 1 (MIDI channel index 0)
+                self.send_control_change(0, config['cc1'], default_midi_val)
+                time.sleep(0.02)
+                # Deck 2 (MIDI channel index 1)
+                self.send_control_change(1, config['cc2'], default_midi_val)
+                time.sleep(0.02)
 
             self.midi_out.close_port()
             print(f"✓ MIDI device '{self.device_name}' closed")
@@ -152,10 +164,10 @@ class VirtualMIDIDevice:
     
     def value_to_midi(self, control_name: str, value: float) -> int:
         """Converts a control's value in its Mixxx range to a MIDI value (0-127)."""
-        if control_name not in self.midi_config:
+        if control_name not in self.midi_control_config:
             return 64
         
-        config = self.midi_config[control_name]
+        config = self.midi_control_config[control_name]
         min_val, default_val, max_val = config['min_value'], config['default'], config['max_value']
 
         # Handle non-linear controls like EQ
@@ -214,6 +226,19 @@ class VirtualMIDIDevice:
         
         return smoothed
     
+    def apply_smoothing_on_channel(self, control_name: str, new_value: float, channel: int) -> float:
+        """Apply smoothing per channel to avoid cross-talk between decks."""
+        if channel not in self.smoothed_values_by_channel:
+            self.smoothed_values_by_channel[channel] = {}
+        channel_map = self.smoothed_values_by_channel[channel]
+        if control_name not in channel_map:
+            channel_map[control_name] = new_value
+            return new_value
+        old_value = channel_map[control_name]
+        smoothed = (self.smoothing_factor * old_value) + ((1 - self.smoothing_factor) * new_value)
+        channel_map[control_name] = smoothed
+        return smoothed
+    
     def update_control(self, control_name: str, value: float, force_send: bool = False):
         """
         Update a specific control with gesture data
@@ -223,7 +248,7 @@ class VirtualMIDIDevice:
             value: The value in the control's native range (e.g. 0.0-4.0 for EQ)
             force_send: Send even if value hasn't changed significantly
         """
-        if control_name not in self.midi_config:
+        if control_name not in self.midi_control_config:
             return False
         
         # Apply smoothing
@@ -239,13 +264,10 @@ class VirtualMIDIDevice:
             if abs(midi_value - last_value) < 2:
                 return False
         
-        # Get MIDI configuration
-        config = self.midi_config[control_name]
-        channel = config['channel']
-        cc_number = config['cc']
-        
-        # Send MIDI message
-        success = self.send_control_change(channel, cc_number, midi_value)
+        # Send on Deck 1 (MIDI channel index 0) with cc1
+        config = self.midi_control_config[control_name]
+        cc_number = config['cc1']
+        success = self.send_control_change(0, cc_number, midi_value)
         
         if success:
             self.last_sent_values[control_name] = midi_value
@@ -253,6 +275,40 @@ class VirtualMIDIDevice:
         
         return False
     
+    def update_control_on_channel(self, control_name: str, value: float, deck: int, force_send: bool = False):
+        """
+        Update a specific control on a given MIDI channel (0-based)
+        without altering the original single-deck logic.
+        """
+        if control_name not in self.midi_control_config:
+            return False
+        
+        # Apply per-deck smoothing
+        smoothed_value = self.apply_smoothing_on_channel(control_name, value, deck)
+        
+        # Convert to MIDI value
+        midi_value = self.value_to_midi(control_name, smoothed_value)
+        
+        # Deck-scoped last value tracking
+        if deck not in self.last_sent_values_by_channel:
+            self.last_sent_values_by_channel[deck] = {}
+        last_value = self.last_sent_values_by_channel[deck].get(control_name)
+        
+        if not force_send and last_value is not None:
+            if abs(midi_value - last_value) < 2:
+                return False
+        
+        config = self.midi_control_config[control_name]
+        cc_number = config['cc2'] if deck == 2 else config['cc1']
+        midi_channel_index = deck - 1
+        success = self.send_control_change(midi_channel_index, cc_number, midi_value)
+        if success:
+            self.last_sent_values_by_channel[deck][control_name] = midi_value
+            return True
+        return False
+
+
+
     def update_all_controls(self, knob_values: Dict[str, float], active_knob: Optional[str] = None):
         """
         Update all controls from gesture data
@@ -279,6 +335,34 @@ class VirtualMIDIDevice:
         
         return sent_count
     
+    def update_all_controls_on_channel(self, knob_values: Dict[str, float], active_knob: Optional[str], deck: int):
+        """Update all controls on a specific deck (1 or 2)."""
+        if not self.midi_out:
+            return 0
+        
+        sent_count = 0
+        
+        if active_knob and active_knob in knob_values:
+            if self.update_control_on_channel(active_knob, knob_values[active_knob], deck):
+                sent_count += 1
+        
+        for control_name, value in knob_values.items():
+            if control_name != active_knob:
+                if self.update_control_on_channel(control_name, value, deck):
+                    sent_count += 1
+        
+        return sent_count
+
+    def send_toggle(self, toggle_key: str, deck: int):
+        """Send a toggle CC defined in midi_toggle_config on the given deck (1 or 2)."""
+        if toggle_key not in self.midi_toggle_config:
+            return False
+        cfg = self.midi_toggle_config[toggle_key]
+        cc = cfg['cc2'] if deck == 2 else cfg['cc1']
+        value = cfg.get('toggle_value', 127)
+        midi_channel_index = deck - 1
+        return self.send_control_change(midi_channel_index, cc, value)
+    
     def send_test_sequence(self):
         """Send a test sequence to verify MIDI connection"""
         print("Sending test MIDI sequence...")
@@ -287,7 +371,7 @@ class VirtualMIDIDevice:
         
         for control in test_controls:
             print(f"Testing {control}...")
-            config = self.midi_config[control]
+            config = self.midi_control_config[control]
             
             # Send min value
             self.update_control(control, config['min_value'], force_send=True)
@@ -333,13 +417,12 @@ class VirtualMIDIDevice:
             'high': '4 fingers'
         }
         
-        for control, config in self.midi_config.items():
+        for control, config in self.midi_control_config.items():
             control_display = control_names[control]
             fingers = finger_counts[control]
-            cc_num = config['cc']
+            cc_display = f"D1:{config['cc1']} D2:{config['cc2']}"
             range_display = f"{config['min_value']:.1f}-{config['max_value']:.1f}"
-            
-            print(f"│ {control_display:<11} │ {fingers:<10} │ {cc_num:<11} │ {range_display:<12} │")
+            print(f"│ {control_display:<11} │ {fingers:<10} │ {cc_display:<11} │ {range_display:<12} │")
         
         print("└─────────────┴────────────┴─────────────┴──────────────┘")
         print("\nMIDI Message Format:")

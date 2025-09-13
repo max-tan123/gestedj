@@ -79,6 +79,16 @@ class HandDetectorWithMIDI:
         self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
         
+        # Deck 2 mirrors (do not change original deck 1 state)
+        self.knobs2 = {k: v['default'] for k, v in self.knob_params.items()}
+        self.active_knob2 = None
+        self.previous_angle2 = None
+        self.current_pointer_angle2 = 0.0
+        self.current_finger_count2 = 0
+        self.previous_finger_count2 = 0
+        self.knob_locked2 = False
+        self.gesture_active2 = False
+        
         # Tracking variables for continuous control
         self.stream_initial_angle = None
         self.previous_angle = None
@@ -104,6 +114,9 @@ class HandDetectorWithMIDI:
         # Thumbs up gesture tracking
         self.thumbs_up_detected = False
         self.previous_thumbs_up = False
+        # Deck 2 thumbs up tracking
+        self.thumbs_up_detected2 = False
+        self.previous_thumbs_up2 = False
         
         # MIDI Integration
         self.midi_device = None
@@ -152,9 +165,15 @@ class HandDetectorWithMIDI:
                                 self.knobs, 
                                 self.active_knob
                             )
+                            # Send deck 2 knob values on Deck 2 (deck numbering 1/2)
+                            sent_count2 = self.midi_device.update_all_controls_on_channel(
+                                self.knobs2,
+                                self.active_knob2,
+                                2
+                            )
                             
-                            if sent_count > 0 and self.show_console_output:
-                                print(f"MIDI: Sent {sent_count} control updates")
+                            if (sent_count > 0 or sent_count2 > 0) and self.show_console_output:
+                                print(f"MIDI: Sent deck1={sent_count} deck2={sent_count2} control updates")
                     
                     self.last_midi_send_time = current_time
                 
@@ -176,6 +195,11 @@ class HandDetectorWithMIDI:
     def process_frame(self, frame):
         """Process frame with optimizations"""
         start_time = time.time()
+        
+        # Reset thumbs up indicators at the start of each frame.
+        # They will be turned on only if hands exist and gesture passes.
+        self.thumbs_up_detected = False
+        self.thumbs_up_detected2 = False
         
         # Resize frame for faster processing if needed
         height, width = frame.shape[:2]
@@ -243,22 +267,29 @@ class HandDetectorWithMIDI:
                     'landmarks': hand_data
                 })
                 
-                # Update DJ knob values for the first hand only
-                if hand_idx == 0:
-                    self.current_pointer_angle = self.update_knob_values(hand_landmarks.landmark)
-                    
-                    # Check for thumbs up gesture and send play/pause MIDI
-                    handedness = results.multi_handedness[hand_idx].classification[0].label
-                    current_thumbs_up = self.is_thumbs_up(hand_landmarks.landmark, handedness)
-                    
-                    # Detect thumbs up edge (transition from not thumbs up to thumbs up)
+                # Frame was flipped before processing, so MediaPipe labels are mirrored.
+                # Flip deck mapping per request: map raw 'Left' → Deck 1, raw 'Right' → Deck 2
+                raw_label = results.multi_handedness[hand_idx].classification[0].label
+                if raw_label == 'Left':
+                    # Deck 1
+                    self.current_pointer_angle = self.update_knob_values_deck1(hand_landmarks.landmark)
+                    current_thumbs_up = self.is_thumbs_up(hand_landmarks.landmark, raw_label)
                     if current_thumbs_up and not self.previous_thumbs_up:
-                        self.send_play_pause_midi()
+                        self.send_play_pause_midi(deck=1)
                         if self.show_console_output:
                             print("Thumbs up detected - sending play/pause MIDI signal")
-                    
                     self.previous_thumbs_up = current_thumbs_up
                     self.thumbs_up_detected = current_thumbs_up
+                elif raw_label == 'Right':
+                    # Deck 2
+                    self.current_pointer_angle2 = self.update_knob_values_deck2(hand_landmarks.landmark)
+                    current_thumbs_up2 = self.is_thumbs_up(hand_landmarks.landmark, raw_label)
+                    if current_thumbs_up2 and not self.previous_thumbs_up2:
+                        self.send_play_pause_midi(deck=2)
+                        if self.show_console_output:
+                            print("Thumbs up detected (deck 2) - sending play/pause MIDI signal")
+                    self.previous_thumbs_up2 = current_thumbs_up2
+                    self.thumbs_up_detected2 = current_thumbs_up2
         
         # Track processing time
         process_time = time.time() - start_time
@@ -328,7 +359,7 @@ class HandDetectorWithMIDI:
             if distance < 0.01:
                 return 0.0
             
-            angle = math.degrees(math.atan2(dy, dx))
+            angle = math.degrees(-math.atan2(dx, dy))
             
             while angle > 180:
                 angle -= 360
@@ -342,7 +373,7 @@ class HandDetectorWithMIDI:
                 print(f"Error calculating angle: {e}")
             return 0.0
     
-    def update_knob_values(self, landmarks):
+    def update_knob_values_deck1(self, landmarks):
         """Update DJ knob values with MIDI output"""
         try:
             if not landmarks or len(landmarks) < 21:
@@ -434,7 +465,7 @@ class HandDetectorWithMIDI:
             
         except Exception as e:
             if self.show_console_output:
-                print(f"Error in update_knob_values: {e}")
+                print(f"Error in update_knob_values_deck1: {e}")
             self.handle_detection_loss()
             return 0.0
     
@@ -457,6 +488,76 @@ class HandDetectorWithMIDI:
             
         except Exception:
             return False
+    
+    def update_knob_values_deck2(self, landmarks):
+        """Duplicate of update_knob_values for Deck 2 (right hand), independent state"""
+        try:
+            if not landmarks or len(landmarks) < 21:
+                # Do not affect deck 1 state here
+                return 0.0
+            
+            required_landmarks = [0, 6, 8]
+            for idx in required_landmarks:
+                if landmarks[idx].x < 0 or landmarks[idx].x > 1 or landmarks[idx].y < 0 or landmarks[idx].y > 1:
+                    return 0.0
+            
+            finger_count = self.count_fingers(landmarks)
+            current_angle = self.calculate_pointer_angle(landmarks)
+            
+            self.previous_finger_count2 = self.current_finger_count2
+            self.current_finger_count2 = finger_count
+            prev_active = self.active_knob2
+            
+            # Determine target knob
+            target_knob = None
+            if finger_count == 1:
+                target_knob = 'filter'
+            elif finger_count == 2:
+                target_knob = 'low'
+            elif finger_count == 3:
+                target_knob = 'mid'
+            elif finger_count == 4:
+                target_knob = 'high'
+            
+            pointer_up = self.is_pointer_finger_up(landmarks)
+            
+            if target_knob and pointer_up and not self.knob_locked2:
+                # Starting new gesture or switching knobs
+                if self.active_knob2 != target_knob or not self.gesture_active2:
+                    self.active_knob2 = target_knob
+                    self.gesture_active2 = True
+                    self.previous_angle2 = current_angle
+                    if self.show_console_output and prev_active != self.active_knob2:
+                        print(f"[Deck2] Started {target_knob} control at angle {current_angle:.1f}°")
+                elif self.active_knob2 == target_knob and self.gesture_active2 and self.previous_angle2 is not None:
+                    delta_angle = current_angle - self.previous_angle2
+                    if delta_angle > 180:
+                        delta_angle -= 360
+                    elif delta_angle < -180:
+                        delta_angle += 360
+                    params = self.knob_params[target_knob]
+                    sensitivity = params['range'] / 180.0
+                    scaled_delta = delta_angle * sensitivity
+                    new_value = self.knobs2[target_knob] + scaled_delta
+                    self.knobs2[target_knob] = max(params['min'], min(params['max'], new_value))
+                    self.previous_angle2 = current_angle
+            elif not pointer_up and self.gesture_active2:
+                if self.active_knob2 and self.show_console_output:
+                    print(f"[Deck2] Gesture ended - {self.active_knob2} locked at {self.knobs2[self.active_knob2]:.2f}")
+                self.gesture_active2 = False
+                self.knob_locked2 = True
+                self.previous_angle2 = None
+            elif target_knob is None:
+                self.knob_locked2 = False
+                self.gesture_active2 = False
+                self.previous_angle2 = None
+                self.active_knob2 = None
+            
+            return current_angle
+        except Exception as e:
+            if self.show_console_output:
+                print(f"Error in update_knob_values_deck2: {e}")
+            return 0.0
     
     def is_thumbs_up(self, landmarks, handedness):
         """
@@ -511,18 +612,18 @@ class HandDetectorWithMIDI:
         except (IndexError, AttributeError):
             return False
     
-    def send_play_pause_midi(self):
+    def send_play_pause_midi(self, deck: int):
         """Send play/pause MIDI signal (CC 18, 0x12) as per XML configuration"""
         if self.midi_device and self.midi_enabled:
             try:
-                # Send CC 18 (0x12) on channel 1 (0) with value 127 (0x7F) for toggle
-                self.midi_device.send_control_change(0, 0x12, 127)
+                # Deck 1 uses deck=1
+                self.midi_device.send_toggle('play', deck)
                 if self.show_console_output:
-                    print("MIDI: Sent play/pause toggle (CC 18)")
+                    print(f"MIDI: Sent play/pause toggle (CC 18) for deck {deck}")
             except Exception as e:
                 if self.show_console_output:
-                    print(f"Error sending play/pause MIDI: {e}")
-    
+                    print(f"Error sending play/pause MIDI for deck {deck}: {e}")
+
     def handle_detection_loss(self):
         """Handle cases where hand detection is lost"""
         self.hand_detected = False
@@ -534,15 +635,15 @@ class HandDetectorWithMIDI:
         """Draw DJ control interface with MIDI status"""
         height, width = frame.shape[:2]
         
-        # DJ Interface positioned on the right side
-        interface_x = width - 400  # Wider box for more space
+        # DJ Interface positioned on the left side (Deck 1)
+        interface_x = 20  # Wider box for more space
         interface_y = 30
         
         # Background
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (width - 10, interface_y + 300), (40, 40, 40), -1)
+                     (interface_x + 390, interface_y + 300), (40, 40, 40), -1)
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (width - 10, interface_y + 300), (255, 255, 255), 2)
+                     (interface_x + 390, interface_y + 300), (255, 255, 255), 2)
         
         # Title
         cv2.putText(frame, "AI DJ CONTROL + MIDI", (interface_x, interface_y + 15), 
@@ -666,6 +767,102 @@ class HandDetectorWithMIDI:
                              (interface_x + 390, y_pos + 8), (255, 255, 255), 2)
             
             y_pos += 25
+
+        # -------------------- Deck 2 UI (right side) --------------------
+        interface2_x = width - 400
+        interface2_y = 30
+        
+        # Background
+        cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
+                     (interface2_x + 390, interface2_y + 300), (40, 40, 40), -1)
+        cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
+                     (interface2_x + 390, interface2_y + 300), (255, 255, 255), 2)
+        
+        # Title
+        cv2.putText(frame, "AI DJ CONTROL + MIDI (Deck 2)", (interface2_x, interface2_y + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # MIDI Status
+        y2 = interface2_y + 35
+        midi_status2 = "CONNECTED" if self.midi_enabled else "DISCONNECTED"
+        midi_color2 = (0, 255, 0) if self.midi_enabled else (0, 0, 255)
+        cv2.putText(frame, f"MIDI: {midi_status2}", (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, midi_color2, 1)
+        
+        # Gesture info Deck 2
+        y2 += 25
+        finger_text2 = f"Fingers: {self.current_finger_count2}"
+        cv2.putText(frame, finger_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        
+        y2 += 20
+        active_text2 = f"Active: {self.active_knob2 or 'None'}"
+        cv2.putText(frame, active_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        
+        y2 += 20
+        thumbs_up_text2 = f"Thumbs Up: {'YES' if self.thumbs_up_detected2 else 'NO'}"
+        thumbs_up_color2 = (0, 255, 0) if self.thumbs_up_detected2 else (128, 128, 128)
+        cv2.putText(frame, thumbs_up_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color2, 1)
+        
+        y2 += 20
+        gesture_text2 = f"Gesture: {'Active' if self.gesture_active2 else 'Inactive'}"
+        cv2.putText(frame, gesture_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active2 else (255, 100, 100), 1)
+        
+        # Show current pointer angle Deck 2
+        if hasattr(self, 'current_pointer_angle2'):
+            y2 += 20
+            angle_text2 = f"Angle: {self.current_pointer_angle2:.1f}°"
+            cv2.putText(frame, angle_text2, (interface2_x, y2), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Draw knobs with MIDI CC info Deck 2
+        y2 += 40
+        knob_colors2 = knob_colors
+        finger_mapping2 = finger_mapping
+        cc_mapping2 = cc_mapping
+        
+        for i, knob_name in enumerate(self.knob_names):
+            knob_value2 = self.knobs2[knob_name]
+            color2 = knob_colors2[knob_name]
+            
+            label2 = f"{finger_mapping2[knob_name]} {knob_name.upper()} ({cc_mapping2[knob_name]})"
+            cv2.putText(frame, label2, (interface2_x, y2), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color2, 1)
+            
+            angle_text2_val = f"{knob_value2:+6.1f}°"
+            if self.midi_device:
+                midi_value2 = self.midi_device.value_to_midi(knob_name, knob_value2)
+            else:
+                midi_value2 = 0
+            
+            cv2.putText(frame, f"{knob_value2:.2f}", (interface2_x + 120, y2),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            cv2.putText(frame, f"Sent:{midi_value2:3d}", (interface2_x + 180, y2),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            
+            # Knob visualization bar Deck 2
+            bar_x2 = interface2_x + 320
+            bar_y2 = y2 - 8
+            bar_width2 = 60
+            bar_height2 = 10
+            cv2.rectangle(frame, (bar_x2, bar_y2), 
+                         (bar_x2 + bar_width2, bar_y2 + bar_height2), (100, 100, 100), -1)
+            params2 = self.knob_params[knob_name]
+            normalized_value2 = (knob_value2 - params2['min']) / params2['range']
+            value_width2 = int(normalized_value2 * bar_width2)
+            if knob_value2 != params2['default']:
+                cv2.rectangle(frame, (bar_x2, bar_y2), 
+                             (bar_x2 + value_width2, bar_y2 + bar_height2), color2, -1)
+            center_x2 = bar_x2 + int((params2['default'] - params2['min']) / params2['range'] * bar_width2)
+            cv2.line(frame, (center_x2, bar_y2), (center_x2, bar_y2 + bar_height2), 
+                    (255, 255, 255), 1)
+            if self.active_knob2 == knob_name:
+                cv2.rectangle(frame, (interface2_x - 5, y2 - 12), 
+                             (interface2_x + 390, y2 + 8), (255, 255, 255), 2)
+            y2 += 25
     
     def draw_optimized_info(self, frame, landmark_data):
         """Draw information overlay"""
@@ -688,10 +885,16 @@ class HandDetectorWithMIDI:
         # Draw DJ Control Interface
         self.draw_dj_interface(frame)
         
-        # Draw prominent thumbs up message when detected
-        if self.thumbs_up_detected:
-            height, width = frame.shape[:2]
-            text = "THUMBS UP!"
+        # Draw prominent thumbs up message when detected for each deck
+        height, width = frame.shape[:2]
+        if self.thumbs_up_detected or self.thumbs_up_detected2:
+            text = ""
+            if self.thumbs_up_detected and self.thumbs_up_detected2:
+                text = "THUMBS UP! (DECK 1 & DECK 2)"
+            elif self.thumbs_up_detected:
+                text = "THUMBS UP! (DECK 1)"
+            elif self.thumbs_up_detected2:
+                text = "THUMBS UP! (DECK 2)"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 2.0
             thickness = 4
