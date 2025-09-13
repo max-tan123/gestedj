@@ -298,44 +298,89 @@ class HandDetectorWithMIDI:
         return frame, landmark_data
     
     def count_fingers(self, landmarks):
-        """Simple finger counting with debug output"""
+        """Extended finger counting using colinearity and radial distance"""
         try:
-            fingers_up = 0
+            import numpy as np
+            
+            # Convert landmarks to numpy array
+            lms = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+            
+            fingers_extended = 0
             debug_info = []
             
-            finger_data = [
-                ("Index", 8, 6),    # tip, pip
-                ("Middle", 12, 10),
-                ("Ring", 16, 14),
-                ("Pinky", 20, 18)
+            # Finger chain definitions: [MCP, PIP, DIP, TIP]
+            finger_chains = [
+                ("Index", [5, 6, 7, 8]),
+                ("Middle", [9, 10, 11, 12]),
+                ("Ring", [13, 14, 15, 16]),
+                ("Pinky", [17, 18, 19, 20])
             ]
             
-            for finger_name, tip_idx, pip_idx in finger_data:
+            # Calculate palm scale (wrist to index MCP distance)
+            wrist = lms[0]
+            palm_scale = np.linalg.norm(lms[5] - wrist)
+            
+            if palm_scale < 0.01:  # Too small, invalid
+                self.finger_debug_info = ["INVALID: Palm too small"]
+                self.finger_debug_count = 0
+                return 0
+            
+            for finger_name, chain in finger_chains:
                 try:
-                    tip = landmarks[tip_idx]
-                    pip = landmarks[pip_idx]
+                    mcp, pip, dip, tip = [lms[i] for i in chain]
                     
-                    if (tip.x < 0 or tip.x > 1 or tip.y < 0 or tip.y > 1 or
-                        pip.x < 0 or pip.x > 1 or pip.y < 0 or pip.y > 1):
-                        debug_info.append(f"{finger_name}: INVALID")
-                        continue
+                    # Check colinearity (straightness) using segment vectors
+                    s0 = pip - mcp    # MCP to PIP
+                    s1 = dip - pip    # PIP to DIP  
+                    s2 = tip - dip    # DIP to TIP
                     
-                    is_up = tip.y < pip.y
+                    def safe_cosine(a, b):
+                        na = np.linalg.norm(a)
+                        nb = np.linalg.norm(b)
+                        if na < 1e-8 or nb < 1e-8:
+                            return 1.0
+                        return np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0)
                     
-                    if is_up:
-                        fingers_up += 1
-                        debug_info.append(f"{finger_name}: UP")
+                    # Calculate curvature (total bend angle)
+                    cos01 = safe_cosine(s0, s1)
+                    cos12 = safe_cosine(s1, s2)
+                    
+                    bend_angle_01 = math.degrees(math.acos(np.clip(cos01, -1.0, 1.0)))
+                    bend_angle_12 = math.degrees(math.acos(np.clip(cos12, -1.0, 1.0)))
+                    total_curvature = bend_angle_01 + bend_angle_12
+                    
+                    # Check if finger is straight enough (curvature approach)
+                    angle_threshold = 40.0  # degrees
+                    is_straight = total_curvature < angle_threshold
+                    
+                    # Check radial monotonicity (tip farther from wrist than base)
+                    r_mcp = np.linalg.norm(mcp - wrist)
+                    r_pip = np.linalg.norm(pip - wrist)
+                    r_dip = np.linalg.norm(dip - wrist)
+                    r_tip = np.linalg.norm(tip - wrist)
+                    
+                    # Ensure distances increase along the finger with some tolerance
+                    margin = 0.03 * palm_scale
+                    is_monotonic = (r_mcp + margin < r_pip < r_dip < r_tip - margin/2)
+                    
+                    # Finger is extended if both conditions are met
+                    is_extended = is_straight and is_monotonic
+                    
+                    if is_extended:
+                        fingers_extended += 1
+                        debug_info.append(f"{finger_name}: EXTENDED (curve={total_curvature:.1f}°)")
                     else:
-                        debug_info.append(f"{finger_name}: DOWN")
+                        reason = "CURVED" if not is_straight else "NOT_MONOTONIC"
+                        debug_info.append(f"{finger_name}: {reason} (curve={total_curvature:.1f}°)")
                         
-                except (IndexError, AttributeError):
+                except (IndexError, AttributeError) as e:
                     debug_info.append(f"{finger_name}: ERROR")
                     continue
             
             self.finger_debug_info = debug_info
-            self.finger_debug_count = fingers_up
+            self.finger_debug_count = fingers_extended
             
-            return max(0, min(4, fingers_up))
+            return max(0, min(4, fingers_extended))
             
         except Exception as e:
             self.finger_debug_info = [f"COUNT ERROR: {e}"]
