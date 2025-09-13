@@ -10,13 +10,11 @@ import numpy as np
 import time
 import math
 from collections import deque
-import sys
-import os
 import threading
 
 # Import our MIDI device
 try:
-    from midi_virtual_device import VirtualMIDIDevice
+    from utils.midi_virtual_device import VirtualMIDIDevice
     MIDI_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: MIDI device not available: {e}")
@@ -72,19 +70,17 @@ class HandDetectorWithMIDI:
         self.show_all_landmarks = False
         
         # DJ Control System
-        self.knobs = {
-            'filter': 0.0,    # 1 finger - high/low pass filter
-            'low': 0.0,       # 2 fingers - low frequency
-            'mid': 0.0,       # 3 fingers - mid frequency
-            'high': 0.0       # 4 fingers - high frequency
+        self.knob_params = {
+            'filter': {'min': 0.0, 'max': 1.0, 'default': 0.5, 'range': 1.0},
+            'low':    {'min': 0.0, 'max': 4.0, 'default': 1.0, 'range': 4.0},
+            'mid':    {'min': 0.0, 'max': 4.0, 'default': 1.0, 'range': 4.0},
+            'high':   {'min': 0.0, 'max': 4.0, 'default': 1.0, 'range': 4.0}
         }
+        self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
         
         # Tracking variables for continuous control
         self.stream_initial_angle = None
-        self.stream_previous_final_angle = {
-            'filter': 0.0, 'low': 0.0, 'mid': 0.0, 'high': 0.0
-        }
         self.previous_angle = None
         self.current_finger_count = 0
         self.previous_finger_count = 0
@@ -92,6 +88,7 @@ class HandDetectorWithMIDI:
         self.previous_active_knob = None
         self.knob_locked = False
         self.gesture_active = False
+        self.current_pointer_angle = 0.0
         
         # Edge case handling
         self.hand_detected = False
@@ -101,6 +98,8 @@ class HandDetectorWithMIDI:
         # Finger detection
         self.finger_tip_indices = [4, 8, 12, 16, 20]
         self.finger_pip_indices = [3, 6, 10, 14, 18]
+        self.finger_debug_info = []
+        self.finger_debug_count = 0
         
         # MIDI Integration
         self.midi_device = None
@@ -273,9 +272,6 @@ class HandDetectorWithMIDI:
                         debug_info.append(f"{finger_name}: INVALID")
                         continue
                     
-                    tip_x, tip_y = int(tip.x * 1280), int(tip.y * 720)
-                    pip_x, pip_y = int(pip.x * 1280), int(pip.y * 720)
-                    
                     is_up = tip.y < pip.y
                     
                     if is_up:
@@ -372,9 +368,6 @@ class HandDetectorWithMIDI:
                 
                 # Starting new gesture or switching knobs
                 if self.active_knob != target_knob or not self.gesture_active:
-                    if self.active_knob:
-                        self.stream_previous_final_angle[self.active_knob] = self.knobs[self.active_knob]
-                    
                     self.active_knob = target_knob
                     self.gesture_active = True
                     self.previous_angle = current_angle
@@ -392,18 +385,21 @@ class HandDetectorWithMIDI:
                     elif delta_angle < -180:
                         delta_angle += 360
                     
-                    scaled_delta = (135.0 / 25.0) * delta_angle
+                    params = self.knob_params[target_knob]
+                    # Sensitivity: 180 degrees of rotation covers the full range
+                    sensitivity = params['range'] / 180.0
+                    scaled_delta = delta_angle * sensitivity
+
                     new_value = self.knobs[target_knob] + scaled_delta
-                    self.knobs[target_knob] = max(-135.0, min(135.0, new_value))
+                    self.knobs[target_knob] = max(params['min'], min(params['max'], new_value))
                     
                     self.previous_angle = current_angle
             
             # End gesture when pointer goes down
             elif not pointer_up and self.gesture_active:
                 if self.active_knob:
-                    self.stream_previous_final_angle[self.active_knob] = self.knobs[self.active_knob]
                     if self.show_console_output:
-                        print(f"Stream ended - {self.active_knob} locked at {self.knobs[self.active_knob]:.1f}")
+                        print(f"Gesture ended - {self.active_knob} locked at {self.knobs[self.active_knob]:.2f}")
                 
                 self.gesture_active = False
                 self.knob_locked = True
@@ -411,9 +407,6 @@ class HandDetectorWithMIDI:
             
             # Reset when no valid gesture
             elif target_knob is None:
-                if self.gesture_active and self.active_knob:
-                    self.stream_previous_final_angle[self.active_knob] = self.knobs[self.active_knob]
-                
                 self.knob_locked = False
                 self.gesture_active = False
                 self.previous_angle = None
@@ -452,8 +445,6 @@ class HandDetectorWithMIDI:
         """Handle cases where hand detection is lost"""
         self.hand_detected = False
         self.stable_detection_count = 0
-        if self.gesture_active and self.active_knob:
-            self.stream_previous_final_angle[self.active_knob] = self.knobs[self.active_knob]
         self.gesture_active = False
         self.previous_angle = None
     
@@ -462,14 +453,14 @@ class HandDetectorWithMIDI:
         height, width = frame.shape[:2]
         
         # DJ Interface positioned on the right side
-        interface_x = width - 350  # Wider for MIDI info
+        interface_x = width - 400  # Wider box for more space
         interface_y = 30
         
         # Background
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (width - 10, interface_y + 280), (40, 40, 40), -1)
+                     (width - 10, interface_y + 300), (40, 40, 40), -1)
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (width - 10, interface_y + 280), (255, 255, 255), 2)
+                     (width - 10, interface_y + 300), (255, 255, 255), 2)
         
         # Title
         cv2.putText(frame, "AI DJ CONTROL + MIDI", (interface_x, interface_y + 15), 
@@ -528,6 +519,8 @@ class HandDetectorWithMIDI:
             'high': 'CC4'
         }
         
+        feedback_values = self.midi_device.get_feedback_values() if self.midi_device else {}
+
         for i, knob_name in enumerate(self.knob_names):
             knob_value = self.knobs[knob_name]
             color = knob_colors[knob_name]
@@ -539,16 +532,25 @@ class HandDetectorWithMIDI:
             
             # Knob value and MIDI value
             angle_text = f"{knob_value:+6.1f}°"
-            midi_value = int((knob_value + 135.0) / 270.0 * 127) if self.midi_device else 0
-            midi_text = f"MIDI:{midi_value:3d}"
+            if self.midi_device:
+                midi_value = self.midi_device.value_to_midi(knob_name, knob_value)
+            else:
+                midi_value = 0
             
-            cv2.putText(frame, angle_text, (interface_x + 120, y_pos), 
+            feedback_val = feedback_values.get(knob_name, 0)
+
+            sent_text = f"Sent:{midi_value:3d}"
+            recv_text = f"Recv:{feedback_val:3d}"
+            
+            cv2.putText(frame, f"{knob_value:.2f}", (interface_x + 120, y_pos),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-            cv2.putText(frame, midi_text, (interface_x + 200, y_pos), 
+            cv2.putText(frame, sent_text, (interface_x + 180, y_pos),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            cv2.putText(frame, recv_text, (interface_x + 250, y_pos),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 255, 150), 1)
             
             # Knob visualization bar
-            bar_x = interface_x + 270
+            bar_x = interface_x + 320
             bar_y = y_pos - 8
             bar_width = 60
             bar_height = 10
@@ -558,21 +560,22 @@ class HandDetectorWithMIDI:
                          (bar_x + bar_width, bar_y + bar_height), (100, 100, 100), -1)
             
             # Value bar
-            normalized_value = (knob_value + 135) / 270
+            params = self.knob_params[knob_name]
+            normalized_value = (knob_value - params['min']) / params['range']
             value_width = int(normalized_value * bar_width)
-            if knob_value != 0:
+            if knob_value != params['default']:
                 cv2.rectangle(frame, (bar_x, bar_y), 
                              (bar_x + value_width, bar_y + bar_height), color, -1)
             
             # Center line
-            center_x = bar_x + bar_width // 2
+            center_x = bar_x + int((params['default'] - params['min']) / params['range'] * bar_width)
             cv2.line(frame, (center_x, bar_y), (center_x, bar_y + bar_height), 
                     (255, 255, 255), 1)
             
             # Highlight active knob
             if self.active_knob == knob_name:
                 cv2.rectangle(frame, (interface_x - 5, y_pos - 12), 
-                             (interface_x + 330, y_pos + 8), (255, 255, 255), 2)
+                             (interface_x + 390, y_pos + 8), (255, 255, 255), 2)
             
             y_pos += 25
     
@@ -621,6 +624,7 @@ class HandDetectorWithMIDI:
         print("  's' - Save current frame")
         print("  'r' - Reset all knobs to 0")
         print("  't' - Send MIDI test sequence")
+        print("  'd' - Toggle MIDI debug output")
         print("\nDJ Controls:")
         print("  1 finger up = Filter knob (CC1)")
         print("  2 fingers up = Low EQ knob (CC2)") 
@@ -672,13 +676,12 @@ class HandDetectorWithMIDI:
                     print(f"Saved frame {frame_count}")
                 elif key == ord('r'):
                     # Reset all knobs
-                    self.knobs = {'filter': 0.0, 'low': 0.0, 'mid': 0.0, 'high': 0.0}
-                    self.stream_previous_final_angle = {'filter': 0.0, 'low': 0.0, 'mid': 0.0, 'high': 0.0}
+                    self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
                     self.previous_angle = None
                     self.active_knob = None
                     self.knob_locked = False
                     self.gesture_active = False
-                    print("All knobs reset to 0")
+                    print("All knobs reset to default values")
                 elif key == ord('t'):
                     # Send MIDI test sequence
                     if self.midi_device:
@@ -686,6 +689,10 @@ class HandDetectorWithMIDI:
                         self.midi_device.send_test_sequence()
                     else:
                         print("MIDI device not available")
+                elif key == ord('d'):
+                    if self.midi_device:
+                        self.midi_device.debug = not self.midi_device.debug
+                        print(f"MIDI Debug output: {'ON' if self.midi_device.debug else 'OFF'}")
         
         except KeyboardInterrupt:
             print("\nShutting down...")

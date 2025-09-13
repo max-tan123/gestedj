@@ -1,0 +1,156 @@
+<?xml version='1.0' encoding='utf-8'?>
+<MixxxControllerPreset mixxxVersion="" schemaVersion="1">
+    <info>
+        <name>AI_DJ_Gestures</name>
+    </info>
+    <controller id="">
+        <scriptfiles/>
+        <controls>
+            <!-- Filter Control -->
+            <control>
+                <group>[QuickEffectRack1_[Channel1]]</group>
+                <key>super1</key>
+                <description>Filter control (1 finger)</description>
+                <status>0xB0</status>
+                <midino>0x01</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Low EQ Control -->
+            <control>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter1</key>
+                <description>Low EQ control (2 fingers)</description>
+                <status>0xB0</status>
+                <midino>0x02</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Mid EQ Control -->
+            <control>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter2</key>
+                <description>Mid EQ control (3 fingers)</description>
+                <status>0xB0</status>
+                <midino>0x03</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- High EQ Control -->
+            <control>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter3</key>
+                <description>High EQ control (4 fingers)</description>
+                <status>0xB0</status>
+                <midino>0x04</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Effect Unit Toggles -->
+            <!-- Toggle for the Filter unit -->
+            <control>
+                <group>[QuickEffectRack1_[Channel1]]</group>
+                <key>enabled</key>
+                <description>Toggle Filter Rack</description>
+                <status>0xB0</status>
+                <midino>0x10</midino>
+                <options>
+                    <toggle/>
+                </options>
+            </control>
+            <!-- Toggle for the EQ unit -->
+            <control>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>enabled</key>
+                <description>Toggle EQ Rack</description>
+                <status>0xB0</status>
+                <midino>0x11</midino>
+                <options>
+                    <toggle/>
+                </options>
+            </control>
+        </controls>
+        <outputs>
+            <!-- Feedback for Filter (CC 1 on Channel 2) -->
+            <output>
+                <group>[QuickEffectRack1_[Channel1]]</group>
+                <key>super1</key>
+                <status>0xB1</status>
+                <midino>0x01</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>0.51</minimum>
+            </output>
+            <output>
+                <group>[QuickEffectRack1_[Channel1]]</group>
+                <key>super1</key>
+                <status>0xB1</status>
+                <midino>0x01</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.49</maximum>
+            </output>
+            <!-- Feedback for Low EQ (CC 2 on Channel 2) -->
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter1</key>
+                <status>0xB1</status>
+                <midino>0x02</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>1.1</minimum>
+            </output>
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter1</key>
+                <status>0xB1</status>
+                <midino>0x02</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.9</maximum>
+            </output>
+            <!-- Feedback for Mid EQ (CC 3 on Channel 2) -->
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter2</key>
+                <status>0xB1</status>
+                <midino>0x03</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>1.1</minimum>
+            </output>
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter2</key>
+                <status>0xB1</status>
+                <midino>0x03</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.9</maximum>
+            </output>
+            <!-- Feedback for High EQ (CC 4 on Channel 2) -->
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter3</key>
+                <status>0xB1</status>
+                <midino>0x04</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <minimum>1.1</minimum>
+            </output>
+            <output>
+                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
+                <key>parameter3</key>
+                <status>0xB1</status>
+                <midino>0x04</midino>
+                <on>0x7F</on>
+                <off>0x00</off>
+                <maximum>0.9</maximum>
+            </output>
+        </outputs>
+    </controller>
+</MixxxControllerPreset>

@@ -17,195 +17,93 @@ The system consists of three main components that work together to translate han
 
 ## Core Components
 
-### 1. Hand Detection Module (`hand_detection_midi.py`)
+### 1. Hand Detection Module (`app.py`)
 
 **Purpose**: Real-time hand gesture recognition and tracking using computer vision
 
 **Key Features**:
 - **MediaPipe Integration**: Uses Google's MediaPipe library for robust hand landmark detection
-- **21-Point Hand Tracking**: Tracks all 21 hand landmarks with 3D coordinates (x, y, z)
-- **Multi-Hand Support**: Detects and tracks up to 2 hands simultaneously
-- **Real-Time Processing**: Optimized for low-latency performance (>30 FPS)
-- **Gesture Recognition**: Interprets hand positions to extract DJ control parameters
+- **Gesture Recognition**: Interprets finger counts and hand rotation to control DJ parameters.
+- **Real-Time UI**: An OpenCV window provides real-time visual feedback on gestures, MIDI status, and Mixxx controller state.
 
 **Technical Implementation**:
 - **Computer Vision Pipeline**:
   - Camera input capture via OpenCV
-  - Frame preprocessing and optimization
   - MediaPipe hand landmark detection
-  - 3D coordinate extraction and normalization
-  
 - **Gesture Analysis**:
-  - Hand position mapping to control values
-  - Gesture smoothing and filtering
-  - Multi-hand coordination handling
-  - Real-time parameter extraction
+  - Finger counting to select the active DJ control.
+  - Calculation of hand rotation angle to modify the control's value.
+  - State synchronization with Mixxx to ensure smooth "soft takeover".
 
-### 2. MIDI Translation Module (`midi_virtual_device.py`)
+### 2. MIDI Translation Module (`utils/midi_virtual_device.py`)
 
-**Purpose**: Converts gesture data into MIDI Control Change (CC) messages
+**Purpose**: Converts gesture data into MIDI messages and handles feedback from Mixxx.
 
 **Key Features**:
-- **Virtual MIDI Device**: Creates a system-level MIDI output device
-- **Real-Time Translation**: Converts gesture parameters to MIDI CC messages
-- **Value Smoothing**: Applies smoothing algorithms to prevent jittery controls
-- **Multi-Parameter Control**: Handles multiple simultaneous control parameters
-- **Configurable Mapping**: Customizable gesture-to-MIDI parameter mapping
+- **Virtual MIDI Device**: Creates a system-level MIDI input/output device that Mixxx can connect to.
+- **Bi-directional Communication**: Sends control messages to Mixxx and receives state feedback from Mixxx.
+- **Value Smoothing**: Applies smoothing algorithms to prevent jittery controls.
+- **Non-Linear Value Mapping**: Correctly translates linear hand rotation into the non-linear response curves for Mixxx's EQs.
 
 **MIDI Configuration**:
 ```python
 midi_config = {
-    'filter': {'channel': 0, 'cc': 1, 'range': [0, 127]},    # High/Low pass filter
-    'low': {'channel': 0, 'cc': 2, 'range': [0, 127]},       # Low EQ
-    'mid': {'channel': 0, 'cc': 3, 'range': [0, 127]},       # Mid EQ  
-    'high': {'channel': 0, 'cc': 4, 'range': [0, 127]},      # High EQ
+    # Knobs are controlled on Channel 1 (0)
+    'filter': {'channel': 0, 'cc': 1, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
+    'low':    {'channel': 0, 'cc': 2, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    'mid':    {'channel': 0, 'cc': 3, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    'high':   {'channel': 0, 'cc': 4, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    # Toggles are on CC 16 & 17
+    'toggle_filter': {'channel': 0, 'cc': 16},
+    'toggle_eq':     {'channel': 0, 'cc': 17},
 }
+# Feedback is received on Channel 2 (1)
 ```
 
-### 3. Mixxx Integration (`AI_DJ_Gestures.mixxx.xml`)
+### 3. Mixxx Integration (`mixxx_utils/AI_DJ_Gestures.midi.xml`)
 
-**Purpose**: Maps MIDI messages to specific DJ controls in Mixxx software
+**Purpose**: Maps MIDI messages to specific DJ controls in Mixxx software.
 
 **Key Features**:
-- **Custom MIDI Mapping**: XML configuration file for Mixxx
-- **EQ Control Mapping**: Maps hand gestures to equalizer controls
-- **Filter Control**: Connects gestures to high/low-pass filters
-- **Real-Time Responsiveness**: Optimized for live performance use
+- **Custom MIDI Mapping**: XML configuration file that defines all input controls and output feedback.
+- **EQ & Filter Mapping**: Maps incoming MIDI CC messages to the correct effect parameters.
+- **Effect Toggle Mapping**: Maps a dedicated MIDI message to enabling/disabling the effect racks.
+- **MIDI Feedback**: Configured to send MIDI messages back to the Python app when controls are changed in the Mixxx UI.
 
 ## Data Flow
 
-### 1. Input Processing
-```
-Camera Feed → OpenCV → Frame Preprocessing → MediaPipe Hand Detection
-```
+The data flow is a complete loop:
 
-### 2. Gesture Recognition
-```
-Hand Landmarks → Coordinate Analysis → Gesture Parameters → Value Normalization
-```
-
-### 3. MIDI Translation
-```
-Gesture Values → MIDI CC Messages → Virtual MIDI Device → System MIDI Bus
-```
-
-### 4. DJ Software Control
-```
-MIDI Input → Mixxx Mapping → EQ/Filter Controls → Audio Output
-```
-
-## Technical Specifications
-
-### Performance Metrics
-- **Frame Rate**: 30+ FPS real-time processing
-- **Latency**: <50ms end-to-end gesture-to-audio
-- **Hand Detection Accuracy**: 95%+ under good lighting
-- **Tracking Stability**: Robust tracking with minimal jitter
-
-### System Requirements
-- **Python**: 3.7 or higher
-- **Camera**: Standard webcam (720p recommended)
-- **OS**: macOS/Linux (Windows with additional MIDI setup)
-- **RAM**: 4GB minimum, 8GB recommended
-- **CPU**: Modern multi-core processor for real-time processing
-
-### Dependencies
-- **Computer Vision**: OpenCV (4.11.0+), MediaPipe (0.10.21)
-- **MIDI**: python-rtmidi (1.5.8), mido (1.3.3)
-- **Scientific Computing**: NumPy (1.26.4), SciPy (1.16.2)
-- **Machine Learning**: JAX (0.7.1), TensorFlow (via MediaPipe)
+1.  **Input (Python -> Mixxx)**:
+    `Camera -> OpenCV -> MediaPipe -> Gesture Analysis -> MIDI CC Message -> Virtual MIDI Device -> Mixxx`
+2.  **Feedback (Mixxx -> Python)**:
+    `Mixxx Control Change -> XML Output Mapping -> MIDI CC Message -> Virtual MIDI Device -> Python UI`
 
 ## Gesture Control Mapping
 
-### Hand Position Controls
-- **X-Axis Movement**: Controls EQ frequency bands
-- **Y-Axis Movement**: Controls filter cutoff frequency
-- **Hand Distance**: Controls effect intensity
-- **Multi-Hand Gestures**: Simultaneous multi-parameter control
+The gesture system is based on the number of fingers being held up. Once a control is selected, rotating your hand modifies the value.
 
-### Control Parameters
-1. **Filter Control**: High/low-pass filter cutoff frequency
-2. **Low EQ**: Bass frequency adjustment
-3. **Mid EQ**: Midrange frequency adjustment
-4. **High EQ**: Treble frequency adjustment
-
-## Optimization Features
-
-### Performance Optimizations
-- **Model Complexity**: Uses lightweight MediaPipe model (complexity=0)
-- **Frame Processing**: Efficient landmark extraction and display
-- **Selective Rendering**: Option to show only key landmarks
-- **Buffered I/O**: Optimized camera and MIDI buffer management
-
-### User Interface Features
-- **Real-Time Feedback**: Live coordinate display and FPS monitoring
-- **Interactive Controls**: Keyboard shortcuts for customization
-- **Visual Feedback**: Hand landmark visualization with gesture indicators
-- **Console Output**: Optional detailed coordinate logging
-
-## Error Handling & Robustness
-
-### Camera Handling
-- Automatic camera detection and initialization
-- Graceful fallback for camera connection issues
-- Frame drop handling for performance consistency
-
-### MIDI Reliability
-- Virtual device creation and management
-- Connection state monitoring
-- Message queue management to prevent overflow
-
-### Gesture Recognition Stability
-- Hand presence detection and tracking
-- Coordinate smoothing and filtering
-- Multi-hand disambiguation
-
-## Use Cases
-
-### Live DJ Performance
-- Real-time EQ adjustment during mixing
-- Filter sweeps and effects control
-- Hands-free operation during complex mixes
-
-### Studio Production
-- Creative sound manipulation
-- Automation recording
-- Intuitive parameter control
-
-### Educational Demonstrations
-- Visual DJ technique instruction
-- Interactive music technology demos
-- Accessibility-focused DJ interfaces
-
-## Future Enhancements
-
-### Planned Features
-- Additional gesture recognition (pinch, rotation, etc.)
-- Machine learning-based gesture customization
-- Extended MIDI control mapping
-- Multi-deck control support
-- Wireless camera support
-
-### Scalability Options
-- Multiple camera input support
-- Cloud-based gesture recognition
-- Mobile device integration
-- VR/AR interface development
+-   **0 Fingers (Fist)**: Toggles the Filter and EQ effect racks on or off. You must enable the effects before the other controls will work.
+-   **1 Finger**: Selects the **Filter**. Rotate your hand to control the high/low-pass filter.
+-   **2 Fingers**: Selects the **Low EQ**. Rotate your hand to control the bass frequencies.
+-   **3 Fingers**: Selects the **Mid EQ**. Rotate your hand to control the midrange frequencies.
+-   **4 Fingers**: Selects the **High EQ**. Rotate your hand to control the treble frequencies.
 
 ## File Structure
 
 ```
-AI_DJ/
-├── hand_detection_midi.py          # Main hand detection with MIDI output
-├── hand_detection_optimized.py     # Performance-optimized version
-├── hand_detection.py               # Basic hand detection implementation
-├── midi_virtual_device.py          # Virtual MIDI device implementation
-├── quick_test.py                    # System testing utilities
-├── AI_DJ_Gestures.mixxx.xml        # Mixxx MIDI mapping configuration
-├── requirements.txt                 # Python dependencies
-├── README.md                        # Project documentation
-├── SETUP_INSTRUCTIONS.md           # Installation and setup guide
-└── SYSTEM_OVERVIEW.md              # This system overview document
+/
+├── app.py                            # Main hand detection and UI application
+├── utils/
+│   └── midi_virtual_device.py      # Virtual MIDI device implementation
+├── mixxx_utils/
+│   └── AI_DJ_Gestures.midi.xml     # Mixxx MIDI mapping configuration
+├── tests/
+│   └── quick_test.py               # System testing utilities
+├── requirements.txt                  # Python dependencies
+├── README.md                         # Project documentation
+├── SETUP_INSTRUCTIONS.md            # Installation and setup guide
+└── SYSTEM_OVERVIEW.md               # This system overview document
 ```
 
 ## Development Notes
