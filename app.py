@@ -101,6 +101,10 @@ class HandDetectorWithMIDI:
         self.finger_debug_info = []
         self.finger_debug_count = 0
         
+        # Thumbs up gesture tracking
+        self.thumbs_up_detected = False
+        self.previous_thumbs_up = False
+        
         # MIDI Integration
         self.midi_device = None
         self.midi_enabled = False
@@ -242,6 +246,19 @@ class HandDetectorWithMIDI:
                 # Update DJ knob values for the first hand only
                 if hand_idx == 0:
                     self.current_pointer_angle = self.update_knob_values(hand_landmarks.landmark)
+                    
+                    # Check for thumbs up gesture and send play/pause MIDI
+                    handedness = results.multi_handedness[hand_idx].classification[0].label
+                    current_thumbs_up = self.is_thumbs_up(hand_landmarks.landmark, handedness)
+                    
+                    # Detect thumbs up edge (transition from not thumbs up to thumbs up)
+                    if current_thumbs_up and not self.previous_thumbs_up:
+                        self.send_play_pause_midi()
+                        if self.show_console_output:
+                            print("Thumbs up detected - sending play/pause MIDI signal")
+                    
+                    self.previous_thumbs_up = current_thumbs_up
+                    self.thumbs_up_detected = current_thumbs_up
         
         # Track processing time
         process_time = time.time() - start_time
@@ -441,6 +458,71 @@ class HandDetectorWithMIDI:
         except Exception:
             return False
     
+    def is_thumbs_up(self, landmarks, handedness):
+        """
+        Check for a thumbs up gesture with new, specific rules.
+        1. Thumb tip is above the MCP joint.
+        2. Thumb tip and IP joint are the highest points on the hand.
+        3. Other fingers are curled inwards based on hand orientation.
+        4. Thumb extension must be substantial (distance check for robustness).
+        """
+        try:
+            # Rule 1: Thumb tip is above the thumb MCP joint.
+            thumb_tip = landmarks[4]
+            thumb_mcp = landmarks[2]
+            if thumb_tip.y >= thumb_mcp.y:
+                return False
+
+            # Rule 2: Thumb tip and IP joint are the highest points.
+            thumb_ip = landmarks[3]
+            highest_y = min(thumb_tip.y, thumb_ip.y)
+            for i, lm in enumerate(landmarks):
+                # Skip the thumb tip and IP
+                if i in [3, 4]:
+                    continue
+                if lm.y < highest_y:
+                    return False # Another point was higher
+
+            # Rule 3: Other fingers are curled inwards.
+            finger_indices = [(8, 6), (12, 10), (16, 14), (20, 18)] # (tip, pip)
+            for tip_idx, pip_idx in finger_indices:
+                tip = landmarks[tip_idx]
+                pip = landmarks[pip_idx]
+
+                if handedness == 'Right':
+                    # For a right hand, tip should be to the left of the pip
+                    if tip.x <= pip.x:
+                        return False
+                elif handedness == 'Left':
+                    # For a left hand, tip should be to the right of the pip
+                    if tip.x >= pip.x:
+                        return False
+            
+            # Rule 4: Thumb extension robustness check
+            # Distance between thumb tip (4) and thumb MCP (2) must be greater than
+            # the distance between index MCP (5) and middle MCP (9)
+            thumb_distance = abs(thumb_tip.y - thumb_mcp.y)
+            reference_distance = abs(landmarks[5].y - landmarks[9].y)
+            
+            if thumb_distance <= reference_distance:
+                return False
+            
+            return True
+        except (IndexError, AttributeError):
+            return False
+    
+    def send_play_pause_midi(self):
+        """Send play/pause MIDI signal (CC 18, 0x12) as per XML configuration"""
+        if self.midi_device and self.midi_enabled:
+            try:
+                # Send CC 18 (0x12) on channel 1 (0) with value 127 (0x7F) for toggle
+                self.midi_device.send_control_change(0, 0x12, 127)
+                if self.show_console_output:
+                    print("MIDI: Sent play/pause toggle (CC 18)")
+            except Exception as e:
+                if self.show_console_output:
+                    print(f"Error sending play/pause MIDI: {e}")
+    
     def handle_detection_loss(self):
         """Handle cases where hand detection is lost"""
         self.hand_detected = False
@@ -483,6 +565,12 @@ class HandDetectorWithMIDI:
         active_text = f"Active: {self.active_knob or 'None'}"
         cv2.putText(frame, active_text, (interface_x, y_pos), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        
+        y_pos += 20
+        thumbs_up_text = f"Thumbs Up: {'YES' if self.thumbs_up_detected else 'NO'}"
+        thumbs_up_color = (0, 255, 0) if self.thumbs_up_detected else (128, 128, 128)
+        cv2.putText(frame, thumbs_up_text, (interface_x, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color, 1)
         
         y_pos += 20
         gesture_text = f"Gesture: {'Active' if self.gesture_active else 'Inactive'}"
@@ -599,6 +687,27 @@ class HandDetectorWithMIDI:
         
         # Draw DJ Control Interface
         self.draw_dj_interface(frame)
+        
+        # Draw prominent thumbs up message when detected
+        if self.thumbs_up_detected:
+            height, width = frame.shape[:2]
+            text = "THUMBS UP!"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 2.0
+            thickness = 4
+            
+            # Get text size to center it
+            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+            
+            # Center position
+            center_x = (width - text_width) // 2
+            center_y = (height + text_height) // 2
+            
+            # Draw text with outline for better visibility
+            # Black outline
+            cv2.putText(frame, text, (center_x, center_y), font, font_scale, (0, 0, 0), thickness + 2)
+            # Green text
+            cv2.putText(frame, text, (center_x, center_y), font, font_scale, (0, 255, 0), thickness)
         
         return frame
     

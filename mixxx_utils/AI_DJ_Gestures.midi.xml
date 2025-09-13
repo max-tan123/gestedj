@@ -51,24 +51,13 @@
                 </options>
             </control>
             <!-- Effect Unit Toggles -->
-            <!-- Toggle for the Filter unit -->
+            <!-- Toggle for Play/Pause on Channel 1 -->
             <control>
-                <group>[QuickEffectRack1_[Channel1]]</group>
-                <key>enabled</key>
-                <description>Toggle Filter Rack</description>
+                <group>[Channel1]</group>
+                <key>play</key>
+                <description>Toggle Play/Pause</description>
                 <status>0xB0</status>
-                <midino>0x10</midino>
-                <options>
-                    <toggle/>
-                </options>
-            </control>
-            <!-- Toggle for the EQ unit -->
-            <control>
-                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
-                <key>enabled</key>
-                <description>Toggle EQ Rack</description>
-                <status>0xB0</status>
-                <midino>0x11</midino>
+                <midino>0x12</midino> <!-- CC 18 -->
                 <options>
                     <toggle/>
                 </options>
@@ -132,24 +121,14 @@
                 <off>0x00</off>
                 <maximum>0.9</maximum>
             </output>
-            <!-- Feedback for High EQ (CC 4 on Channel 2) -->
+            <!-- Feedback for Play/Pause Status -->
             <output>
-                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
-                <key>parameter3</key>
+                <group>[Channel1]</group>
+                <key>play</key>
                 <status>0xB1</status>
-                <midino>0x04</midino>
+                <midino>0x12</midino> <!-- CC 18 -->
                 <on>0x7F</on>
                 <off>0x00</off>
-                <minimum>1.1</minimum>
-            </output>
-            <output>
-                <group>[EqualizerRack1_[Channel1]_Effect1]</group>
-                <key>parameter3</key>
-                <status>0xB1</status>
-                <midino>0x04</midino>
-                <on>0x7F</on>
-                <off>0x00</off>
-                <maximum>0.9</maximum>
             </output>
         </outputs>
     </controller>
