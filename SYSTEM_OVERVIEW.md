@@ -7,7 +7,7 @@ The AI DJ Hand Gesture Control System is an innovative real-time gesture recogni
 ## System Architecture
 
 The system consists of three main components that work together to translate hand gestures into DJ controls:
-
+ 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │  Hand Detection │───▶│ MIDI Translation│───▶│   Mixxx DJ      │
