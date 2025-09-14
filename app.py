@@ -78,6 +78,8 @@ class HandDetectorWithMIDI:
         }
         self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
+
+        self.knob_max_angle = 150
         
         # Deck 2 mirrors (do not change original deck 1 state)
         self.knobs2 = {k: v['default'] for k, v in self.knob_params.items()}
@@ -614,28 +616,21 @@ class HandDetectorWithMIDI:
             # Determine which specific fingers are extended
             ext_flags = self.get_extended_finger_flags(landmarks)
             finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
-            # Total across all five (thumb included) for exact-count gating
-            thumb = bool(ext_flags.get('thumb', False))
-            index = bool(ext_flags.get('index', False))
-            middle = bool(ext_flags.get('middle', False))
-            ring = bool(ext_flags.get('ring', False))
-            pinky = bool(ext_flags.get('pinky', False))
-            total_extended = int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count = self.current_finger_count
             self.previous_active_knob = self.active_knob
             self.current_finger_count = finger_count
             
-            # Determine target knob using EXACT total finger count (thumb-inclusive)
+            # Determine target knob
             target_knob = None
-            if total_extended == 1 and index:
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
-            elif total_extended == 2 and index and middle:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
-            elif total_extended == 3 and index and middle and ring:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif total_extended == 4 and index and middle and ring and pinky:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
@@ -669,7 +664,7 @@ class HandDetectorWithMIDI:
                     
                     params = self.knob_params[target_knob]
                     # Sensitivity: 180 degrees of rotation covers the full range
-                    sensitivity = params['range'] / 180.0
+                    sensitivity = params['range'] / self.knob_max_angle
                     scaled_delta = delta_angle * sensitivity
 
                     new_value = self.knobs[target_knob] + scaled_delta
@@ -738,27 +733,21 @@ class HandDetectorWithMIDI:
             # Determine which specific fingers are extended (deck 2)
             ext_flags = self.get_extended_finger_flags(landmarks)
             finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
-            thumb = bool(ext_flags.get('thumb', False))
-            index = bool(ext_flags.get('index', False))
-            middle = bool(ext_flags.get('middle', False))
-            ring = bool(ext_flags.get('ring', False))
-            pinky = bool(ext_flags.get('pinky', False))
-            total_extended = int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count2 = self.current_finger_count2
             self.current_finger_count2 = finger_count
             prev_active = self.active_knob2
             
-            # Determine target knob using EXACT total finger count (thumb-inclusive)
+            # Determine target knob
             target_knob = None
-            if total_extended == 1 and index:
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
-            elif total_extended == 2 and index and middle:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
-            elif total_extended == 3 and index and middle and ring:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif total_extended == 4 and index and middle and ring and pinky:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
@@ -778,7 +767,7 @@ class HandDetectorWithMIDI:
                     elif delta_angle < -180:
                         delta_angle += 360
                     params = self.knob_params[target_knob]
-                    sensitivity = params['range'] / 180.0
+                    sensitivity = params['range'] / self.knob_max_angle
                     scaled_delta = delta_angle * sensitivity
                     new_value = self.knobs2[target_knob] + scaled_delta
                     self.knobs2[target_knob] = max(params['min'], min(params['max'], new_value))
@@ -973,7 +962,7 @@ class HandDetectorWithMIDI:
         
         bar_x = interface_x + 120
         bar_y = y_pos - 10
-        bar_width = 150
+        bar_width = 140
         bar_height = 10
         # Background
         cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (80, 80, 80), -1)
@@ -1297,15 +1286,6 @@ class HandDetectorWithMIDI:
         
         frame_count = 0
         
-        # Create window and request always-on-top if supported by OpenCV
-        try:
-            self._window_name = 'AI DJ Hand Control with MIDI'
-            cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-            if hasattr(cv2, 'WND_PROP_TOPMOST'):
-                cv2.setWindowProperty(self._window_name, cv2.WND_PROP_TOPMOST, 1)
-        except Exception:
-            pass
-        
         try:
             while True:
                 ret, frame = cap.read()
@@ -1324,13 +1304,7 @@ class HandDetectorWithMIDI:
                 final_frame = self.draw_optimized_info(annotated_frame, landmark_data)
                 
                 # Display frame
-                try:
-                    win = getattr(self, '_window_name', 'AI DJ Hand Control with MIDI')
-                    cv2.imshow(win, final_frame)
-                    if hasattr(cv2, 'WND_PROP_TOPMOST'):
-                        cv2.setWindowProperty(win, cv2.WND_PROP_TOPMOST, 1)
-                except Exception:
-                    cv2.imshow('AI DJ Hand Control with MIDI', final_frame)
+                cv2.imshow('AI DJ Hand Control with MIDI', final_frame)
                 
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
