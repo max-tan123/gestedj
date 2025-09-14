@@ -127,6 +127,10 @@ class HandDetectorWithMIDI:
         self.volume2_touching = False
         self.volume2_distance_px = 0.0
         
+        # Effect 1 ("rockstar") detection flags per deck
+        self.effect1_detected = False
+        self.effect1_detected2 = False
+        
         # Thumbs up gesture tracking
         self.thumbs_up_detected = False
         self.previous_thumbs_up = False
@@ -222,6 +226,9 @@ class HandDetectorWithMIDI:
         # They will be turned on only if hands exist and gesture passes.
         self.thumbs_up_detected = False
         self.thumbs_up_detected2 = False
+        # Reset effect flags each frame (set true when gesture passes)
+        self.effect1_detected = False
+        self.effect1_detected2 = False
         
         # Resize frame for faster processing if needed
         height, width = frame.shape[:2]
@@ -300,7 +307,7 @@ class HandDetectorWithMIDI:
                 # Determine handedness for this hand early
                 raw_label = results.multi_handedness[hand_idx].classification[0].label
 
-                # ---------------- Volume gesture detection (per deck) ----------------
+                # ---------------- Volume + Rockstar gesture detection (per deck) ----------------
                 try:
                     # Extended finger flags
                     flags = self.get_extended_finger_flags(hand_landmarks.landmark)
@@ -352,6 +359,19 @@ class HandDetectorWithMIDI:
                                     elif self.volume2 > 1.0:
                                         self.volume2 = 1.0
                             volume2_updated_this_frame = True
+                    
+                    # Rockstar gesture: ONLY index and pinky are extended
+                    is_rockstar = (
+                        flags.get('index', False) and
+                        flags.get('pinky', False) and
+                        not flags.get('middle', False) and
+                        not flags.get('ring', False)
+                    )
+                    if is_rockstar:
+                        if raw_label == 'Left':
+                            self.effect1_detected = True
+                        elif raw_label == 'Right':
+                            self.effect1_detected2 = True
                     
                 except Exception:
                     # Keep volume state unchanged on errors for robustness
@@ -489,7 +509,7 @@ class HandDetectorWithMIDI:
     
     def get_extended_finger_flags(self, landmarks):
         """Return which fingers (Index, Middle, Ring, Pinky) are extended using curvature + radial tests."""
-        flags = {'index': False, 'middle': False, 'ring': False, 'pinky': False}
+        flags = {'thumb': False, 'index': False, 'middle': False, 'ring': False, 'pinky': False}
         try:
             lms = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
             wrist = lms[0]
@@ -497,6 +517,7 @@ class HandDetectorWithMIDI:
             if palm_scale < 0.01:
                 return flags
             finger_chains = [
+                ('thumb', [1, 2, 3, 4]),
                 ('index', [5, 6, 7, 8]),
                 ('middle', [9, 10, 11, 12]),
                 ('ring', [13, 14, 15, 16]),
@@ -883,6 +904,12 @@ class HandDetectorWithMIDI:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color, 1)
         
         y_pos += 20
+        rockstar_text = f"Rockstar: {'YES' if self.effect1_detected else 'NO'}"
+        rockstar_color = (0, 215, 255) if self.effect1_detected else (128, 128, 128)
+        cv2.putText(frame, rockstar_text, (interface_x, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, rockstar_color, 1)
+        
+        y_pos += 20
         gesture_text = f"Gesture: {'Active' if self.gesture_active else 'Inactive'}"
         cv2.putText(frame, gesture_text, (interface_x, y_pos), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active else (255, 100, 100), 1)
@@ -1045,6 +1072,12 @@ class HandDetectorWithMIDI:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color2, 1)
         
         y2 += 20
+        rockstar_text2 = f"Rockstar: {'YES' if self.effect1_detected2 else 'NO'}"
+        rockstar_color2 = (0, 215, 255) if self.effect1_detected2 else (128, 128, 128)
+        cv2.putText(frame, rockstar_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, rockstar_color2, 1)
+        
+        y2 += 20
         gesture_text2 = f"Gesture: {'Active' if self.gesture_active2 else 'Inactive'}"
         cv2.putText(frame, gesture_text2, (interface2_x, y2), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active2 else (255, 100, 100), 1)
@@ -1145,16 +1178,24 @@ class HandDetectorWithMIDI:
         # Draw DJ Control Interface
         self.draw_dj_interface(frame)
         
-        # Draw prominent thumbs up message when detected for each deck
+        # Draw prominent thumbs up / rockstar messages when detected for each deck
         height, width = frame.shape[:2]
-        if self.thumbs_up_detected or self.thumbs_up_detected2:
+        if self.thumbs_up_detected or self.thumbs_up_detected2 or self.effect1_detected or self.effect1_detected2:
             text = ""
-            if self.thumbs_up_detected and self.thumbs_up_detected2:
-                text = "THUMBS UP! (DECK 1 & DECK 2)"
-            elif self.thumbs_up_detected:
-                text = "THUMBS UP! (DECK 1)"
-            elif self.thumbs_up_detected2:
-                text = "THUMBS UP! (DECK 2)"
+            if self.effect1_detected or self.effect1_detected2:
+                if self.effect1_detected and self.effect1_detected2:
+                    text = "ROCKSTAR! (DECK 1 & DECK 2)"
+                elif self.effect1_detected:
+                    text = "ROCKSTAR! (DECK 1)"
+                elif self.effect1_detected2:
+                    text = "ROCKSTAR! (DECK 2)"
+            elif self.thumbs_up_detected or self.thumbs_up_detected2:
+                if self.thumbs_up_detected and self.thumbs_up_detected2:
+                    text = "THUMBS UP! (DECK 1 & DECK 2)"
+                elif self.thumbs_up_detected:
+                    text = "THUMBS UP! (DECK 1)"
+                elif self.thumbs_up_detected2:
+                    text = "THUMBS UP! (DECK 2)"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 2.0
             thickness = 4
@@ -1169,8 +1210,9 @@ class HandDetectorWithMIDI:
             # Draw text with outline for better visibility
             # Black outline
             cv2.putText(frame, text, (center_x, center_y), font, font_scale, (0, 0, 0), thickness + 2)
-            # Green text
-            cv2.putText(frame, text, (center_x, center_y), font, font_scale, (0, 255, 0), thickness)
+            # Color text
+            color = (0, 215, 255) if text.startswith("ROCKSTAR") else (0, 255, 0)
+            cv2.putText(frame, text, (center_x, center_y), font, font_scale, color, thickness)
         
         return frame
     
