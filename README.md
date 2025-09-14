@@ -48,11 +48,6 @@ Notes
 - Raw MediaPipe labels are mirrored after frame flip: raw 'Left' → Deck 1, raw 'Right' → Deck 2.
 - Rotate your hand to change the active knob; values are smoothed and sent at 30 Hz.
 
-### Controls in the app
-- Press `q` to quit
-- Press `c` to toggle console output
-- Press `a` to toggle full landmark draw
-- Press `s` to save a frame
 
 ### Troubleshooting
 - **No `AI_DJ_Gestures` in Mixxx**: Make sure GesteDJ is running first.
