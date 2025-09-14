@@ -1,5 +1,9 @@
 ## GesteDJ — Gesture-Controlled DJ for Mixxx
 
+### DEMO: https://youtu.be/jeSW7q4Php0
+
+*^ Had issues uploading to youtube, had to include link in repo*
+
 GesteDJ uses MediaPipe and OpenCV to detect hand gestures and drives a virtual MIDI instrument named `AI_DJ_Gestures` that Mixxx can learn and control. A simple on-screen preview shows what the system sees and stays on top while you perform.
 
 ### Features
