@@ -79,7 +79,7 @@ class HandDetectorWithMIDI:
         self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
 
-        self.knob_max_angle = 150
+        self.knob_max_angle = 160
         
         # Deck 2 mirrors (do not change original deck 1 state)
         self.knobs2 = {k: v['default'] for k, v in self.knob_params.items()}
@@ -674,16 +674,13 @@ class HandDetectorWithMIDI:
             # Determine target knob
             # Determine target knob
             target_knob = None
-            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+
             if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
@@ -797,15 +794,11 @@ class HandDetectorWithMIDI:
             # Determine target knob
             target_knob = None
             if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
-            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
             elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
@@ -1008,10 +1001,22 @@ class HandDetectorWithMIDI:
                 color = magenta; label = "HIGH EQ"
             # Value
             knob_value = self.knobs.get(self.active_knob, 0.0)
-            params = self.knob_params.get(self.active_knob, {'min': 0.0, 'range': 1.0})
-            normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
-            # Clamp and map to symmetric -135..+135 around the Y-axis
-            normalized = max(0.0, min(1.0, float(normalized)))
+            if 'EQ' in label:
+                params = self.knob_params.get(self.active_knob, {'min': 0.0, 'range': 4.0})
+                # Convert MIDI to dB (handle zero case)
+                if knob_value <= 0:
+                    db = -60  # Practical floor instead of -∞
+                else:
+                    db = 20 * math.log10(knob_value)
+                
+                # Linear mapping in dB space and map to 0-1 range
+                normalized = max(0, min(1, ((db + 24) / 48 )))
+
+            else:
+                params = self.knob_params.get(self.active_knob, {'min': 0.0, 'range': 1.0})
+                normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
+                # Clamp and map to symmetric -135..+135 around the Y-axis
+                normalized = max(0.0, min(1.0, float(normalized)))
             # Draw left dial (non-intrusive)
             center_x, center_y = 140, height // 2
             radius = 70
@@ -1034,9 +1039,20 @@ class HandDetectorWithMIDI:
             else:
                 color = magenta; label = "HIGH EQ"
             knob_value = self.knobs2.get(self.active_knob2, 0.0)
-            params = self.knob_params.get(self.active_knob2, {'min': 0.0, 'range': 1.0})
-            normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
-            normalized = max(0.0, min(1.0, float(normalized)))
+            if 'EQ' in label:
+                params = self.knob_params.get(self.active_knob2, {'min': 0.0, 'range': 4.0})
+                # Convert MIDI to dB (handle zero case)
+                if knob_value <= 0:
+                    db = -60  # Practical floor instead of -∞
+                else:
+                    db = 20 * math.log10(knob_value)
+                
+                # Linear mapping in dB space and map to 0-1 range
+                normalized = max(0, min(1, ((db + 24) / 48 )))
+            else:
+                params = self.knob_params.get(self.active_knob2, {'min': 0.0, 'range': 1.0})
+                normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
+                normalized = max(0.0, min(1.0, float(normalized)))
             center_x, center_y = width - 140, height // 2
             radius = 70
             cv2.circle(frame, (center_x, center_y), radius + 12, (0, 0, 0), -1)
