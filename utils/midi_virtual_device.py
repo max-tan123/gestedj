@@ -20,7 +20,7 @@ class VirtualMIDIDevice:
         self.running = False
         self.debug = False
         
-        self.mixxx_feedback_values = {'filter': 0, 'low': 0, 'mid': 0, 'high': 0}
+        self.mixxx_feedback_values = {'filter': 0, 'low': 0, 'mid': 0, 'high': 0, 'volume': 0}
         self.feedback_lock = threading.Lock()
         
         self.debug_print_thread = None
@@ -31,6 +31,8 @@ class VirtualMIDIDevice:
             'low':    {'cc1': 2, 'cc2': 6, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
             'mid':    {'cc1': 3, 'cc2': 7, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
             'high':   {'cc1': 4, 'cc2': 8, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+            # New volume control (linear 0..1)
+            'volume': {'cc1': 9, 'cc2': 10, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
         }
         self.midi_toggle_config = {
             'play':   {'cc1': 0x12, 'cc2': 0x13, 'toggle_value': 127},
@@ -120,7 +122,7 @@ class VirtualMIDIDevice:
             # Check for CC message on Channel 2 (status 0xB1)
             # Our script sends on channel index 1, which is channel 2.
             if (status & 0xF0) == 0xB0 and (status & 0x0F) == 1:
-                control_map = {1: 'filter', 2: 'low', 3: 'mid', 4: 'high'}
+                control_map = {1: 'filter', 2: 'low', 3: 'mid', 4: 'high', 9: 'volume'}
                 control_name = control_map.get(cc)
                 
                 if control_name:
@@ -407,14 +409,16 @@ class VirtualMIDIDevice:
             'filter': 'Hi/Lo Filter',
             'low': 'Low EQ',
             'mid': 'Mid EQ', 
-            'high': 'High EQ'
+            'high': 'High EQ',
+            'volume': 'Channel Vol'
         }
         
         finger_counts = {
             'filter': '1 finger',
             'low': '2 fingers',
             'mid': '3 fingers',
-            'high': '4 fingers'
+            'high': '4 fingers',
+            'volume': 'Pinch'
         }
         
         for control, config in self.midi_control_config.items():

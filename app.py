@@ -111,6 +111,22 @@ class HandDetectorWithMIDI:
         self.finger_debug_info = []
         self.finger_debug_count = 0
         
+        # Volume gesture state (thumb-index pinch with M+R+P extended)
+        self.pinch_distance_px = 40
+        self.volume_sensitivity = -0.0035  # negative so upward movement increases volume (per px)
+
+        self.volume = 1.0  # 0..1 scale
+        self.volume_prev_y = None
+        self.volume_curr_y = None
+        self.volume_touching = False
+        self.volume_distance_px = 0.0
+        # Deck 2 volume state
+        self.volume2 = 1.0  # 0..1 scale
+        self.volume2_prev_y = None
+        self.volume2_curr_y = None
+        self.volume2_touching = False
+        self.volume2_distance_px = 0.0
+        
         # Thumbs up gesture tracking
         self.thumbs_up_detected = False
         self.previous_thumbs_up = False
@@ -171,6 +187,12 @@ class HandDetectorWithMIDI:
                                 self.active_knob2,
                                 2
                             )
+                            # Send channel volumes (0..1) on both decks
+                            try:
+                                self.midi_device.update_control_on_channel('volume', float(self.volume), deck=1)
+                                self.midi_device.update_control_on_channel('volume', float(self.volume2), deck=2)
+                            except Exception:
+                                pass
                             
                             if (sent_count > 0 or sent_count2 > 0) and self.show_console_output:
                                 print(f"MIDI: Sent deck1={sent_count} deck2={sent_count2} control updates")
@@ -217,6 +239,14 @@ class HandDetectorWithMIDI:
         
         # Extract landmark data
         landmark_data = []
+        
+        # Reset per-frame volume gesture aggregation (per deck)
+        volume1_updated_this_frame = False
+        volume2_updated_this_frame = False
+        self.volume_touching = False
+        self.volume_distance_px = 0.0
+        self.volume2_touching = False
+        self.volume2_distance_px = 0.0
         
         if results.multi_hand_landmarks:
             for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
@@ -267,9 +297,68 @@ class HandDetectorWithMIDI:
                     'landmarks': hand_data
                 })
                 
+                # Determine handedness for this hand early
+                raw_label = results.multi_handedness[hand_idx].classification[0].label
+
+                # ---------------- Volume gesture detection (per deck) ----------------
+                try:
+                    # Extended finger flags
+                    flags = self.get_extended_finger_flags(hand_landmarks.landmark)
+                    mrp_extended = flags.get('middle', False) and flags.get('ring', False) and flags.get('pinky', False)
+
+                    # Thumb (4) and Index (8) pixel coords
+                    thumb_tip = hand_landmarks.landmark[4]
+                    index_tip = hand_landmarks.landmark[8]
+                    x4, y4 = int(thumb_tip.x * w), int(thumb_tip.y * h)
+                    x8, y8 = int(index_tip.x * w), int(index_tip.y * h)
+                    dx = x4 - x8
+                    dy = y4 - y8
+                    dist_px = (dx*dx + dy*dy) ** 0.5
+
+                    # Gesture active if M+R+P extended and pinch distance < 50px
+                    if mrp_extended and dist_px < self.pinch_distance_px:
+                        midpoint_y = int((y4 + y8) / 2)
+                        if raw_label == 'Left':
+                            self.volume_touching = True
+                            self.volume_distance_px = float(dist_px)
+                            if self.volume_curr_y is None:
+                                self.volume_prev_y = None
+                                self.volume_curr_y = midpoint_y
+                            else:
+                                self.volume_prev_y = self.volume_curr_y
+                                self.volume_curr_y = midpoint_y
+                                if self.volume_prev_y is not None:
+                                    delta = self.volume_curr_y - self.volume_prev_y
+                                    self.volume += self.volume_sensitivity * float(delta)
+                                    if self.volume < 0.0:
+                                        self.volume = 0.0
+                                    elif self.volume > 1.0:
+                                        self.volume = 1.0
+                            volume1_updated_this_frame = True
+                        elif raw_label == 'Right':
+                            self.volume2_touching = True
+                            self.volume2_distance_px = float(dist_px)
+                            if self.volume2_curr_y is None:
+                                self.volume2_prev_y = None
+                                self.volume2_curr_y = midpoint_y
+                            else:
+                                self.volume2_prev_y = self.volume2_curr_y
+                                self.volume2_curr_y = midpoint_y
+                                if self.volume2_prev_y is not None:
+                                    delta2 = self.volume2_curr_y - self.volume2_prev_y
+                                    self.volume2 += self.volume_sensitivity * float(delta2)
+                                    if self.volume2 < 0.0:
+                                        self.volume2 = 0.0
+                                    elif self.volume2 > 1.0:
+                                        self.volume2 = 1.0
+                            volume2_updated_this_frame = True
+                    
+                except Exception:
+                    # Keep volume state unchanged on errors for robustness
+                    pass
+
                 # Frame was flipped before processing, so MediaPipe labels are mirrored.
                 # Flip deck mapping per request: map raw 'Left' → Deck 1, raw 'Right' → Deck 2
-                raw_label = results.multi_handedness[hand_idx].classification[0].label
                 if raw_label == 'Left':
                     # Deck 1
                     self.current_pointer_angle = self.update_knob_values_deck1(hand_landmarks.landmark)
@@ -291,6 +380,18 @@ class HandDetectorWithMIDI:
                     self.previous_thumbs_up2 = current_thumbs_up2
                     self.thumbs_up_detected2 = current_thumbs_up2
         
+        # If no active volume gesture this frame, reset trackers per deck
+        if not volume1_updated_this_frame:
+            self.volume_touching = False
+            self.volume_distance_px = 0.0
+            self.volume_prev_y = None
+            self.volume_curr_y = None
+        if not volume2_updated_this_frame:
+            self.volume2_touching = False
+            self.volume2_distance_px = 0.0
+            self.volume2_prev_y = None
+            self.volume2_curr_y = None
+        
         # Track processing time
         process_time = time.time() - start_time
         self.frame_times.append(process_time)
@@ -300,7 +401,6 @@ class HandDetectorWithMIDI:
     def count_fingers(self, landmarks):
         """Extended finger counting using colinearity and radial distance"""
         try:
-            import numpy as np
             
             # Convert landmarks to numpy array
             lms = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
@@ -387,6 +487,47 @@ class HandDetectorWithMIDI:
             self.finger_debug_count = 0
             return 0
     
+    def get_extended_finger_flags(self, landmarks):
+        """Return which fingers (Index, Middle, Ring, Pinky) are extended using curvature + radial tests."""
+        flags = {'index': False, 'middle': False, 'ring': False, 'pinky': False}
+        try:
+            lms = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+            wrist = lms[0]
+            palm_scale = np.linalg.norm(lms[5] - wrist)
+            if palm_scale < 0.01:
+                return flags
+            finger_chains = [
+                ('index', [5, 6, 7, 8]),
+                ('middle', [9, 10, 11, 12]),
+                ('ring', [13, 14, 15, 16]),
+                ('pinky', [17, 18, 19, 20])
+            ]
+            for key, chain in finger_chains:
+                mcp, pip, dip, tip = [lms[i] for i in chain]
+                s0 = pip - mcp
+                s1 = dip - pip
+                s2 = tip - dip
+                def safe_cos(a, b):
+                    na = np.linalg.norm(a); nb = np.linalg.norm(b)
+                    if na < 1e-8 or nb < 1e-8:
+                        return 1.0
+                    return np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0)
+                bend01 = math.degrees(math.acos(np.clip(safe_cos(s0, s1), -1.0, 1.0)))
+                bend12 = math.degrees(math.acos(np.clip(safe_cos(s1, s2), -1.0, 1.0)))
+                curvature = bend01 + bend12
+                angle_threshold = 40.0
+                is_straight = curvature < angle_threshold
+                r_mcp = np.linalg.norm(mcp - wrist)
+                r_pip = np.linalg.norm(pip - wrist)
+                r_dip = np.linalg.norm(dip - wrist)
+                r_tip = np.linalg.norm(tip - wrist)
+                margin = 0.03 * palm_scale
+                is_monotonic = (r_mcp + margin < r_pip < r_dip < r_tip - margin/2)
+                flags[key] = bool(is_straight and is_monotonic)
+            return flags
+        except Exception:
+            return flags
+    
     def calculate_pointer_angle(self, landmarks):
         """Calculate angle between wrist and pointer finger tip"""
         try:
@@ -431,7 +572,9 @@ class HandDetectorWithMIDI:
                     self.handle_detection_loss()
                     return 0.0
             
-            finger_count = self.count_fingers(landmarks)
+            # Determine which specific fingers are extended
+            ext_flags = self.get_extended_finger_flags(landmarks)
+            finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count = self.current_finger_count
@@ -440,14 +583,14 @@ class HandDetectorWithMIDI:
             
             # Determine target knob
             target_knob = None
-            if finger_count == 1:
-                target_knob = 'filter'
-            elif finger_count == 2:
-                target_knob = 'low'
-            elif finger_count == 3:
-                target_knob = 'mid'
-            elif finger_count == 4:
-                target_knob = 'high'
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'filter'  # 1 finger: index only
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'low'     # 2 fingers: index + middle
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'mid'     # 3 fingers: index + middle + ring
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
+                target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
             
@@ -546,7 +689,9 @@ class HandDetectorWithMIDI:
                 if landmarks[idx].x < 0 or landmarks[idx].x > 1 or landmarks[idx].y < 0 or landmarks[idx].y > 1:
                     return 0.0
             
-            finger_count = self.count_fingers(landmarks)
+            # Determine which specific fingers are extended (deck 2)
+            ext_flags = self.get_extended_finger_flags(landmarks)
+            finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count2 = self.current_finger_count2
@@ -555,14 +700,14 @@ class HandDetectorWithMIDI:
             
             # Determine target knob
             target_knob = None
-            if finger_count == 1:
-                target_knob = 'filter'
-            elif finger_count == 2:
-                target_knob = 'low'
-            elif finger_count == 3:
-                target_knob = 'mid'
-            elif finger_count == 4:
-                target_knob = 'high'
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'filter'  # 1 finger: index only
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'low'     # 2 fingers: index + middle
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
+                target_knob = 'mid'     # 3 fingers: index + middle + ring
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
+                target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
             
@@ -606,56 +751,75 @@ class HandDetectorWithMIDI:
     
     def is_thumbs_up(self, landmarks, handedness):
         """
-        Check for a thumbs up gesture with new, specific rules.
-        1. Thumb tip is above the MCP joint.
-        2. Thumb tip and IP joint are the highest points on the hand.
-        3. Other fingers are curled inwards based on hand orientation.
-        4. Thumb extension must be substantial (distance check for robustness).
+        Check for thumbs-up using strict deck-specific x/y constraints:
+        - Record pixel locations for all 21 points.
+        - Deck 1 (raw 'Left'): thumb 0..4 must be strictly LEFT of all 5..20.
+        - Deck 2 (raw 'Right'): thumb 0..4 must be strictly RIGHT of all 5..20.
+        - Ascending Y for the thumb chain: y0 < y1 < y2 < y3 < y4.
         """
         try:
-            # Rule 1: Thumb tip is above the thumb MCP joint.
-            thumb_tip = landmarks[4]
-            thumb_mcp = landmarks[2]
-            if thumb_tip.y >= thumb_mcp.y:
+            # Record pixel locations of all points (store for debugging/inspection)
+            # Assumes landmark.x, landmark.y are pixel coordinates or already scaled.
+            self.last_landmark_pixels = [
+                (int(round(lm.x)), int(round(lm.y))) for lm in landmarks
+            ]
+
+            # Safety: ensure we have at least 21 landmarks
+            if len(landmarks) < 21:
                 return False
 
-            # Rule 2: Thumb tip and IP joint are the highest points.
-            thumb_ip = landmarks[3]
-            highest_y = min(thumb_tip.y, thumb_ip.y)
-            for i, lm in enumerate(landmarks):
-                # Skip the thumb tip and IP
-                if i in [3, 4]:
-                    continue
-                if lm.y < highest_y:
-                    return False # Another point was higher
+            # Extract X and Y for required indices
+            thumb_indices = [0, 1, 2, 3, 4]
+            other_indices = list(range(5, 21))
 
-            # Rule 3: Other fingers are curled inwards.
-            finger_indices = [(8, 6), (12, 10), (16, 14), (20, 18)] # (tip, pip)
-            for tip_idx, pip_idx in finger_indices:
-                tip = landmarks[tip_idx]
-                pip = landmarks[pip_idx]
+            thumb_x = [landmarks[i].x for i in thumb_indices]
+            other_x = [landmarks[i].x for i in other_indices]
 
-                if handedness == 'Right':
-                    # For a right hand, tip should be to the left of the pip
-                    if tip.x <= pip.x:
-                        return False
-                elif handedness == 'Left':
-                    # For a left hand, tip should be to the right of the pip
-                    if tip.x >= pip.x:
-                        return False
-            
-            # Rule 4: Thumb extension robustness check
-            # Distance between thumb tip (4) and thumb MCP (2) must be greater than
-            # the distance between index MCP (5) and middle MCP (9)
-            thumb_distance = abs(thumb_tip.y - thumb_mcp.y)
-            reference_distance = abs(landmarks[5].y - landmarks[9].y)
-            
-            if thumb_distance <= reference_distance:
-                return False
-            
-            return True
-        except (IndexError, AttributeError):
+            thumb_y = [landmarks[i].y for i in thumb_indices]
+
+            # X-side constraint (deck-specific, no other allowance)
+            all_left = max(thumb_x) < min(other_x)
+            all_right = min(thumb_x) > max(other_x)
+            if handedness == 'Left':
+                # Deck 1 must be LEFT of others
+                x_side_ok = all_left
+            elif handedness == 'Right':
+                # Deck 2 must be RIGHT of others
+                x_side_ok = all_right
+            else:
+                x_side_ok = False
+
+            # Descending Y constraint for thumb chain (image Y grows downward):
+            # y0 > y1 > y2 > y3 > y4
+            descending_y = (
+                thumb_y[0] > thumb_y[1] > thumb_y[2] > thumb_y[3] > thumb_y[4]
+            )
+
+            valid = bool(x_side_ok and descending_y)
+
+            if valid:
+                # Prepare debug sets sorted by X for on-screen display
+                thumb_pts = [
+                    (i, (int(round(landmarks[i].x)), int(round(landmarks[i].y))))
+                    for i in thumb_indices
+                ]
+                other_pts = [
+                    (i, (int(round(landmarks[i].x)), int(round(landmarks[i].y))))
+                    for i in other_indices
+                ]
+                thumb_pts_sorted = sorted(thumb_pts, key=lambda t: t[1][0])
+                other_pts_sorted = sorted(other_pts, key=lambda t: t[1][0])
+                self.debug_thumb_sets = {
+                    'thumb': thumb_pts_sorted,
+                    'other': other_pts_sorted,
+                }
+            else:
+                self.debug_thumb_sets = None
+
+            return valid
+        except Exception:
             return False
+
     
     def send_play_pause_midi(self, deck: int):
         """Send play/pause MIDI signal (CC 18, 0x12) as per XML configuration"""
@@ -678,7 +842,7 @@ class HandDetectorWithMIDI:
     
     def draw_dj_interface(self, frame):
         """Draw DJ control interface with MIDI status"""
-        height, width = frame.shape[:2]
+        _, width = frame.shape[:2]
         
         # DJ Interface positioned on the left side (Deck 1)
         interface_x = 20  # Wider box for more space
@@ -686,9 +850,9 @@ class HandDetectorWithMIDI:
         
         # Background
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (interface_x + 390, interface_y + 300), (40, 40, 40), -1)
+                     (interface_x + 440, interface_y + 340), (40, 40, 40), -1)
         cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (interface_x + 390, interface_y + 300), (255, 255, 255), 2)
+                     (interface_x + 440, interface_y + 340), (255, 255, 255), 2)
         
         # Title
         cv2.putText(frame, "AI DJ CONTROL + MIDI", (interface_x, interface_y + 15), 
@@ -723,6 +887,35 @@ class HandDetectorWithMIDI:
         cv2.putText(frame, gesture_text, (interface_x, y_pos), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active else (255, 100, 100), 1)
         
+        # Volume gesture overlay
+        y_pos += 20
+        pinch_text = f"Thumb+Index Touch: {'YES' if self.volume_touching else 'NO'}"
+        pinch_color = (0, 255, 0) if self.volume_touching else (128, 128, 128)
+        cv2.putText(frame, pinch_text, (interface_x, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, pinch_color, 1)
+        y_pos += 20
+        cv2.putText(frame, f"Touch Dist: {self.volume_distance_px:.0f}px", (interface_x, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Volume value and bar (0..1)
+        y_pos += 20
+        cv2.putText(frame, f"Volume: {self.volume:.2f}", (interface_x, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        bar_x = interface_x + 120
+        bar_y = y_pos - 10
+        bar_width = 150
+        bar_height = 10
+        # Background
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (80, 80, 80), -1)
+        # Fill
+        fill_width = int(self.volume * bar_width)
+        fill_color = (0, 200, 0) if self.volume_touching else (160, 160, 160)
+        if fill_width > 0:
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), fill_color, -1)
+        # Border
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (255, 255, 255), 1)
+        
         # Show current pointer angle
         if hasattr(self, 'current_pointer_angle'):
             y_pos += 20
@@ -755,7 +948,7 @@ class HandDetectorWithMIDI:
         
         feedback_values = self.midi_device.get_feedback_values() if self.midi_device else {}
 
-        for i, knob_name in enumerate(self.knob_names):
+        for knob_name in self.knob_names:
             knob_value = self.knobs[knob_name]
             color = knob_colors[knob_name]
             
@@ -809,19 +1002,19 @@ class HandDetectorWithMIDI:
             # Highlight active knob
             if self.active_knob == knob_name:
                 cv2.rectangle(frame, (interface_x - 5, y_pos - 12), 
-                             (interface_x + 390, y_pos + 8), (255, 255, 255), 2)
+                             (interface_x + 440, y_pos + 8), (255, 255, 255), 2)
             
             y_pos += 25
 
         # -------------------- Deck 2 UI (right side) --------------------
-        interface2_x = width - 400
+        interface2_x = width - 460
         interface2_y = 30
         
         # Background
         cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
-                     (interface2_x + 390, interface2_y + 300), (40, 40, 40), -1)
+                     (interface2_x + 440, interface2_y + 340), (40, 40, 40), -1)
         cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
-                     (interface2_x + 390, interface2_y + 300), (255, 255, 255), 2)
+                     (interface2_x + 440, interface2_y + 340), (255, 255, 255), 2)
         
         # Title
         cv2.putText(frame, "AI DJ CONTROL + MIDI (Deck 2)", (interface2_x, interface2_y + 15), 
@@ -856,6 +1049,35 @@ class HandDetectorWithMIDI:
         cv2.putText(frame, gesture_text2, (interface2_x, y2), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active2 else (255, 100, 100), 1)
         
+        # Draw knobs with MIDI CC info Deck 2
+
+        knob_colors2 = knob_colors
+        finger_mapping2 = finger_mapping
+        cc_mapping2 = cc_mapping
+        
+        # Deck 2 Volume gesture overlay
+        y2 += 20
+        pinch_text2 = f"Thumb+Index Touch: {'YES' if self.volume2_touching else 'NO'}"
+        pinch_color2 = (0, 255, 0) if self.volume2_touching else (128, 128, 128)
+        cv2.putText(frame, pinch_text2, (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, pinch_color2, 1)
+        y2 += 20
+        cv2.putText(frame, f"Touch Dist: {self.volume2_distance_px:.0f}px", (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y2 += 20
+        cv2.putText(frame, f"Volume: {self.volume2:.2f}", (interface2_x, y2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        bar_x2v = interface2_x + 120
+        bar_y2v = y2 - 10
+        bar_w2v = 150
+        bar_h2v = 10
+        cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + bar_w2v, bar_y2v + bar_h2v), (80, 80, 80), -1)
+        fill_w2v = int(self.volume2 * bar_w2v)
+        fill_c2v = (0, 200, 0) if self.volume2_touching else (160, 160, 160)
+        if fill_w2v > 0:
+            cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + fill_w2v, bar_y2v + bar_h2v), fill_c2v, -1)
+        cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + bar_w2v, bar_y2v + bar_h2v), (255, 255, 255), 1)
+        
         # Show current pointer angle Deck 2
         if hasattr(self, 'current_pointer_angle2'):
             y2 += 20
@@ -863,21 +1085,14 @@ class HandDetectorWithMIDI:
             cv2.putText(frame, angle_text2, (interface2_x, y2), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-        # Draw knobs with MIDI CC info Deck 2
         y2 += 40
-        knob_colors2 = knob_colors
-        finger_mapping2 = finger_mapping
-        cc_mapping2 = cc_mapping
-        
-        for i, knob_name in enumerate(self.knob_names):
+        for knob_name in self.knob_names:
             knob_value2 = self.knobs2[knob_name]
             color2 = knob_colors2[knob_name]
             
             label2 = f"{finger_mapping2[knob_name]} {knob_name.upper()} ({cc_mapping2[knob_name]})"
             cv2.putText(frame, label2, (interface2_x, y2), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color2, 1)
-            
-            angle_text2_val = f"{knob_value2:+6.1f}°"
             if self.midi_device:
                 midi_value2 = self.midi_device.value_to_midi(knob_name, knob_value2)
             else:
@@ -906,7 +1121,7 @@ class HandDetectorWithMIDI:
                     (255, 255, 255), 1)
             if self.active_knob2 == knob_name:
                 cv2.rectangle(frame, (interface2_x - 5, y2 - 12), 
-                             (interface2_x + 390, y2 + 8), (255, 255, 255), 2)
+                             (interface2_x + 440, y2 + 8), (255, 255, 255), 2)
             y2 += 25
     
     def draw_optimized_info(self, frame, landmark_data):
@@ -945,7 +1160,7 @@ class HandDetectorWithMIDI:
             thickness = 4
             
             # Get text size to center it
-            (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+            (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
             
             # Center position
             center_x = (width - text_width) // 2
