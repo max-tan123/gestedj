@@ -130,6 +130,9 @@ class HandDetectorWithMIDI:
         # Effect 1 ("rockstar") detection flags per deck
         self.effect1_detected = False
         self.effect1_detected2 = False
+        # Previous-state flags for edge-triggered MIDI toggles
+        self.previous_effect1_detected = False
+        self.previous_effect1_detected2 = False
         
         # Thumbs up gesture tracking
         self.thumbs_up_detected = False
@@ -193,6 +196,7 @@ class HandDetectorWithMIDI:
                             )
                             # Send channel volumes (0..1) on both decks
                             try:
+                                # Periodic: send current volumes
                                 self.midi_device.update_control_on_channel('volume', float(self.volume), deck=1)
                                 self.midi_device.update_control_on_channel('volume', float(self.volume2), deck=2)
                             except Exception:
@@ -382,6 +386,7 @@ class HandDetectorWithMIDI:
                 if raw_label == 'Left':
                     # Deck 1
                     self.current_pointer_angle = self.update_knob_values_deck1(hand_landmarks.landmark)
+                    
                     current_thumbs_up = self.is_thumbs_up(hand_landmarks.landmark, raw_label)
                     if current_thumbs_up and not self.previous_thumbs_up:
                         self.send_play_pause_midi(deck=1)
@@ -389,9 +394,16 @@ class HandDetectorWithMIDI:
                             print("Thumbs up detected - sending play/pause MIDI signal")
                     self.previous_thumbs_up = current_thumbs_up
                     self.thumbs_up_detected = current_thumbs_up
+
+                    if self.effect1_detected and not self.previous_effect1_detected:
+                        self.send_effect_route_on(deck=1)
+                        if self.show_console_output:
+                            print("Effect1 detected - sending effect route on MIDI signal")
+                    self.previous_effect1_detected = self.effect1_detected
                 elif raw_label == 'Right':
                     # Deck 2
                     self.current_pointer_angle2 = self.update_knob_values_deck2(hand_landmarks.landmark)
+                    
                     current_thumbs_up2 = self.is_thumbs_up(hand_landmarks.landmark, raw_label)
                     if current_thumbs_up2 and not self.previous_thumbs_up2:
                         self.send_play_pause_midi(deck=2)
@@ -399,6 +411,12 @@ class HandDetectorWithMIDI:
                             print("Thumbs up detected (deck 2) - sending play/pause MIDI signal")
                     self.previous_thumbs_up2 = current_thumbs_up2
                     self.thumbs_up_detected2 = current_thumbs_up2
+
+                    if self.effect1_detected2 and not self.previous_effect1_detected2:
+                        self.send_effect_route_on(deck=2)
+                        if self.show_console_output:
+                            print("Effect1 detected (deck 2) - sending effect route on MIDI signal")
+                    self.previous_effect1_detected2 = self.effect1_detected2
         
         # If no active volume gesture this frame, reset trackers per deck
         if not volume1_updated_this_frame:
@@ -841,7 +859,18 @@ class HandDetectorWithMIDI:
         except Exception:
             return False
 
-    
+    def send_effect_route_on(self, deck: int):
+        """Send effect route on MIDI signal (CC 14, 0x14) as per XML configuration"""
+        if self.midi_device and self.midi_enabled:
+            try:
+                self.midi_device.send_toggle('effect1', deck)
+                if self.show_console_output:
+                    print(f"MIDI: Sent effect route on for deck {deck}")
+            except Exception as e:
+                if self.show_console_output:
+                    print(f"Error sending effect route on MIDI for deck {deck}: {e}")
+            
+
     def send_play_pause_midi(self, deck: int):
         """Send play/pause MIDI signal (CC 18, 0x12) as per XML configuration"""
         if self.midi_device and self.midi_enabled:
@@ -849,7 +878,7 @@ class HandDetectorWithMIDI:
                 # Deck 1 uses deck=1
                 self.midi_device.send_toggle('play', deck)
                 if self.show_console_output:
-                    print(f"MIDI: Sent play/pause toggle (CC 18) for deck {deck}")
+                    print(f"MIDI: Sent play/pause toggle for deck {deck}")
             except Exception as e:
                 if self.show_console_output:
                     print(f"Error sending play/pause MIDI for deck {deck}: {e}")

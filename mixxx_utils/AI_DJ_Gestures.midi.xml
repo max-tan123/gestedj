@@ -17,6 +17,28 @@
                     <normal/>
                 </options>
             </control>
+            <!-- Effect Unit 1: Route to Channel1 (group_[Channel1]_enable) -->
+            <control>
+                <group>[EffectRack1_EffectUnit1]</group>
+                <key>group_[Channel1]_enable</key>
+                <description>Effect Unit 1 route to Channel 1</description>
+                <status>0xB0</status>
+                <midino>0x14</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Effect Unit 1 Enabled toggle (Deck 1) -->
+            <control>
+                <group>[EffectRack1_EffectUnit1_Effect1]</group>
+                <key>enabled</key>
+                <description>Effect Unit 1 enable (Deck 1)</description>
+                <status>0xB0</status>
+                <midino>0x16</midino>
+                <options>
+                    <toggle/>
+                </options>
+            </control>
             <!-- Channel Volume Deck 1 -->
             <control>
                 <group>[Channel1]</group>
@@ -26,6 +48,28 @@
                 <midino>0x09</midino>
                 <options>
                     <normal/>
+                </options>
+            </control>
+            <!-- Effect Unit 2: Route to Channel2 (group_[Channel2]_enable) -->
+            <control>
+                <group>[EffectRack1_EffectUnit2]</group>
+                <key>group_[Channel2]_enable</key>
+                <description>Effect Unit 2 route to Channel 2</description>
+                <status>0xB1</status>
+                <midino>0x15</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <!-- Effect Unit 2 Enabled toggle (Deck 2) -->
+            <control>
+                <group>[EffectRack1_EffectUnit2_Effect1]</group>
+                <key>enabled</key>
+                <description>Effect Unit 2 enable (Deck 2)</description>
+                <status>0xB1</status>
+                <midino>0x17</midino>
+                <options>
+                    <toggle/>
                 </options>
             </control>
             <!-- Low EQ Control -->

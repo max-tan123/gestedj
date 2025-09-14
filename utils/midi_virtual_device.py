@@ -33,9 +33,12 @@ class VirtualMIDIDevice:
             'high':   {'cc1': 4, 'cc2': 8, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
             # New volume control (linear 0..1)
             'volume': {'cc1': 9, 'cc2': 10, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
+            # # Effect routing (binary normal CC to keep group_[ChannelN]_enable ON)
         }
         self.midi_toggle_config = {
             'play':   {'cc1': 0x12, 'cc2': 0x13, 'toggle_value': 127},
+            # Effect enabled toggle (EffectUnitN_Effect1.enabled)
+            'effect1': {'cc1': 0x16, 'cc2': 0x17, 'toggle_value': 127},
         }
         
         # Last sent values to avoid duplicate messages
