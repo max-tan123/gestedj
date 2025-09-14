@@ -26,7 +26,7 @@ python app.py
 ```bash
 zsh build_macos_app.sh
 ```
-This generates `dist/GesteDJ.app`. The script also auto-rounds the app icon into a macOS squircle.
+This generates `dist/GesteDJ.app`.
 
 ### First-time Mixxx Integration (do this once)
 1. **Start GesteDJ** to create the MIDI device `AI_DJ_Gestures`.
