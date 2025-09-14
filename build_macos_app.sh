@@ -17,7 +17,7 @@ pip install -q pyinstaller
 
 # Generate a rounded macOS icon from the project PNG (squircle)
 if [ -f images/gestedj_logo1.png ]; then
-  python utils/make_macos_icon.py images/gestedj_logo1.png --out images/gestedj_logo1.icns >/dev/null
+  python utils/make_macos_icon.py images/gestedj_logo1.png --out build_specs/gestedj_logo1.icns >/dev/null
 fi
 
 # Use the generated spec to include Info.plist permissions and icon

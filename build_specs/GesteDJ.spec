@@ -36,7 +36,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['EasyDJ_Logo1.icns'],
+    icon=['gestedj_logo1.icns'],
 )
 coll = COLLECT(
     exe,

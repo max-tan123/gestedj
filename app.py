@@ -148,11 +148,11 @@ class HandDetectorWithMIDI:
         self.previous_thumbs_up2 = False
         
         # Play/stop state with gesture clearing (per hand)
-        self._play_state1 = True
+        self._play_state1 = False
         self._last_thumbs_detection1 = False
         self._clear_time1 = 0.0
         self._clear_duration = 0.3  # 0.3s without detection before allowing toggle
-        self._play_state2 = True
+        self._play_state2 = False
         self._last_thumbs_detection2 = False
         self._clear_time2 = 0.0
         
