@@ -133,6 +133,10 @@ class HandDetectorWithMIDI:
         # Previous-state flags for edge-triggered MIDI toggles
         self.previous_effect1_detected = False
         self.previous_effect1_detected2 = False
+        # Effect timing/merge controls
+        self._effect_started = False
+        self._effect_started_time = 0.0
+        self._effect_white_burst_done = False
         
         # Thumbs up gesture tracking
         self.thumbs_up_detected = False
@@ -140,6 +144,20 @@ class HandDetectorWithMIDI:
         # Deck 2 thumbs up tracking
         self.thumbs_up_detected2 = False
         self.previous_thumbs_up2 = False
+        
+        # Play/stop state with gesture clearing (per hand)
+        self._play_state1 = True
+        self._last_thumbs_detection1 = False
+        self._clear_time1 = 0.0
+        self._clear_duration = 0.3  # 0.3s without detection before allowing toggle
+        self._play_state2 = True
+        self._last_thumbs_detection2 = False
+        self._clear_time2 = 0.0
+        
+        # Overlay timeout tracking (per hand)
+        self._last_knob_time1 = 0
+        self._last_knob_time2 = 0
+        self._knob_timeout = 2.0  # 2 seconds to hide dial after no knob activity
         
         # MIDI Integration
         self.midi_device = None
@@ -149,6 +167,30 @@ class HandDetectorWithMIDI:
         self.midi_thread = None
         self.midi_queue = []
         self.midi_lock = threading.Lock()
+        
+        # Load EasyDJ logo for effects (and a white-tinted version)
+        self.logo_img = None
+        self.logo_white = None
+        try:
+            logo_path = "/Users/vasukaker/Desktop/HackMIT_2025/AI_DJ/EasyDJ_Logo1.png"
+            self.logo_img = cv2.imread(logo_path, cv2.IMREAD_UNCHANGED)
+            if self.logo_img is not None:
+                # Resize logo to small size for particle effects
+                self.logo_img = cv2.resize(self.logo_img, (40, 40))
+                try:
+                    if self.logo_img.shape[2] == 4:
+                        h, w = self.logo_img.shape[:2]
+                        white_bgr = np.full((h, w, 3), 255, dtype=np.uint8)
+                        alpha = self.logo_img[:, :, 3]
+                        self.logo_white = np.dstack([white_bgr, alpha])
+                    else:
+                        # No alpha; approximate by making a white square
+                        h, w = self.logo_img.shape[:2]
+                        self.logo_white = np.full((h, w, 3), 255, dtype=np.uint8)
+                except Exception:
+                    self.logo_white = None
+        except Exception:
+            pass
         
         self.init_midi()
     
@@ -261,7 +303,7 @@ class HandDetectorWithMIDI:
         
         if results.multi_hand_landmarks:
             for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                # Draw landmarks if enabled
+                # Draw landmarks if enabled (guard with low confidence cases)
                 if self.show_all_landmarks:
                     self.mp_draw.draw_landmarks(
                         frame, 
@@ -308,8 +350,11 @@ class HandDetectorWithMIDI:
                     'landmarks': hand_data
                 })
                 
-                # Determine handedness for this hand early
-                raw_label = results.multi_handedness[hand_idx].classification[0].label
+                # Determine handedness for this hand early (guarded)
+                try:
+                    raw_label = results.multi_handedness[hand_idx].classification[0].label
+                except Exception:
+                    continue
 
                 # ---------------- Volume + Rockstar gesture detection (per deck) ----------------
                 try:
@@ -417,6 +462,10 @@ class HandDetectorWithMIDI:
                         if self.show_console_output:
                             print("Effect1 detected (deck 2) - sending effect route on MIDI signal")
                     self.previous_effect1_detected2 = self.effect1_detected2
+        
+        else:
+            # No hands at all; aggressively clear state to avoid ghost detections
+            self.handle_detection_loss()
         
         # If no active volume gesture this frame, reset trackers per deck
         if not volume1_updated_this_frame:
@@ -614,28 +663,21 @@ class HandDetectorWithMIDI:
             # Determine which specific fingers are extended
             ext_flags = self.get_extended_finger_flags(landmarks)
             finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
-            # Total across all five (thumb included) for exact-count gating
-            thumb = bool(ext_flags.get('thumb', False))
-            index = bool(ext_flags.get('index', False))
-            middle = bool(ext_flags.get('middle', False))
-            ring = bool(ext_flags.get('ring', False))
-            pinky = bool(ext_flags.get('pinky', False))
-            total_extended = int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count = self.current_finger_count
             self.previous_active_knob = self.active_knob
             self.current_finger_count = finger_count
             
-            # Determine target knob using EXACT total finger count (thumb-inclusive)
+            # Determine target knob
             target_knob = None
-            if total_extended == 1 and index:
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
-            elif total_extended == 2 and index and middle:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
-            elif total_extended == 3 and index and middle and ring:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif total_extended == 4 and index and middle and ring and pinky:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
@@ -738,27 +780,21 @@ class HandDetectorWithMIDI:
             # Determine which specific fingers are extended (deck 2)
             ext_flags = self.get_extended_finger_flags(landmarks)
             finger_count = int(ext_flags.get('index', False)) + int(ext_flags.get('middle', False)) + int(ext_flags.get('ring', False)) + int(ext_flags.get('pinky', False))
-            thumb = bool(ext_flags.get('thumb', False))
-            index = bool(ext_flags.get('index', False))
-            middle = bool(ext_flags.get('middle', False))
-            ring = bool(ext_flags.get('ring', False))
-            pinky = bool(ext_flags.get('pinky', False))
-            total_extended = int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
             current_angle = self.calculate_pointer_angle(landmarks)
             
             self.previous_finger_count2 = self.current_finger_count2
             self.current_finger_count2 = finger_count
             prev_active = self.active_knob2
             
-            # Determine target knob using EXACT total finger count (thumb-inclusive)
+            # Determine target knob
             target_knob = None
-            if total_extended == 1 and index:
+            if ext_flags.get('index', False) and not ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'filter'  # 1 finger: index only
-            elif total_extended == 2 and index and middle:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and not ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'low'     # 2 fingers: index + middle
-            elif total_extended == 3 and index and middle and ring:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and not ext_flags.get('pinky', False):
                 target_knob = 'mid'     # 3 fingers: index + middle + ring
-            elif total_extended == 4 and index and middle and ring and pinky:
+            elif ext_flags.get('index', False) and ext_flags.get('middle', False) and ext_flags.get('ring', False) and ext_flags.get('pinky', False):
                 target_knob = 'high'    # 4 fingers: index + middle + ring + pinky
             
             pointer_up = self.is_pointer_finger_up(landmarks)
@@ -819,7 +855,6 @@ class HandDetectorWithMIDI:
             # Safety: ensure we have at least 21 landmarks
             if len(landmarks) < 21:
                 return False
-
             # Extract X and Y for required indices
             thumb_indices = [0, 1, 2, 3, 4]
             other_indices = list(range(5, 21))
@@ -895,309 +930,447 @@ class HandDetectorWithMIDI:
             except Exception as e:
                 if self.show_console_output:
                     print(f"Error sending play/pause MIDI for deck {deck}: {e}")
-
+    
     def handle_detection_loss(self):
         """Handle cases where hand detection is lost"""
         self.hand_detected = False
         self.stable_detection_count = 0
+        # Deck 1 resets
         self.gesture_active = False
+        self.knob_locked = False
         self.previous_angle = None
+        self.active_knob = None
+        self.current_finger_count = 0
+        # Deck 2 resets
+        try:
+            self.gesture_active2 = False
+            self.knob_locked2 = False
+            self.previous_angle2 = None
+            self.active_knob2 = None
+            self.current_finger_count2 = 0
+        except Exception:
+            pass
+        # Clear transient gesture flags
+        self.thumbs_up_detected = False
+        self.thumbs_up_detected2 = False
+        self.effect1_detected = False
+        self.effect1_detected2 = False
+        # Clear volume touches
+        self.volume_touching = False
+        self.volume2_touching = False
+        # Hide any lingering overlays
+        self._last_knob_time = 0
     
     def draw_dj_interface(self, frame):
         """Draw DJ control interface with MIDI status"""
-        _, width = frame.shape[:2]
+        height, width = frame.shape[:2]
         
-        # DJ Interface positioned on the left side (Deck 1)
-        interface_x = 20  # Wider box for more space
-        interface_y = 30
+        # Suppressed legacy debug panels; animated, gesture-driven overlays follow below
         
-        # Background
-        cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (interface_x + 440, interface_y + 340), (40, 40, 40), -1)
-        cv2.rectangle(frame, (interface_x - 10, interface_y - 10), 
-                     (interface_x + 440, interface_y + 340), (255, 255, 255), 2)
+        # -------------------- ANIMATED EFFECTS ON TOP --------------------
+        # DJ-themed colors
+        cyan = (200, 255, 0)      # Bright cyan
+        magenta = (255, 100, 255) # Bright magenta  
+        green = (100, 255, 100)   # Bright green
+        yellow = (0, 255, 255)    # Bright yellow
+        orange = (0, 165, 255)    # Orange
+        white = (255, 255, 255)   # White
         
-        # Title
-        cv2.putText(frame, "AI DJ CONTROL + MIDI", (interface_x, interface_y + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        # MIDI Status
-        y_pos = interface_y + 35
-        midi_status = "CONNECTED" if self.midi_enabled else "DISCONNECTED"
-        midi_color = (0, 255, 0) if self.midi_enabled else (0, 0, 255)
-        cv2.putText(frame, f"MIDI: {midi_status}", (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, midi_color, 1)
-        
-        # Gesture info
-        y_pos += 25
-        finger_text = f"Fingers: {self.current_finger_count}"
-        cv2.putText(frame, finger_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        
-        y_pos += 20
-        active_text = f"Active: {self.active_knob or 'None'}"
-        cv2.putText(frame, active_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        y_pos += 20
-        thumbs_up_text = f"Thumbs Up: {'YES' if self.thumbs_up_detected else 'NO'}"
-        thumbs_up_color = (0, 255, 0) if self.thumbs_up_detected else (128, 128, 128)
-        cv2.putText(frame, thumbs_up_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color, 1)
-        
-        y_pos += 20
-        rockstar_text = f"Rockstar: {'YES' if self.effect1_detected else 'NO'}"
-        rockstar_color = (0, 215, 255) if self.effect1_detected else (128, 128, 128)
-        cv2.putText(frame, rockstar_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, rockstar_color, 1)
-        
-        y_pos += 20
-        gesture_text = f"Gesture: {'Active' if self.gesture_active else 'Inactive'}"
-        cv2.putText(frame, gesture_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active else (255, 100, 100), 1)
-        
-        # Volume gesture overlay
-        y_pos += 20
-        pinch_text = f"Thumb+Index Touch: {'YES' if self.volume_touching else 'NO'}"
-        pinch_color = (0, 255, 0) if self.volume_touching else (128, 128, 128)
-        cv2.putText(frame, pinch_text, (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, pinch_color, 1)
-        y_pos += 20
-        cv2.putText(frame, f"Touch Dist: {self.volume_distance_px:.0f}px", (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Volume value and bar (0..1)
-        y_pos += 20
-        cv2.putText(frame, f"Volume: {self.volume:.2f}", (interface_x, y_pos), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        bar_x = interface_x + 120
-        bar_y = y_pos - 10
-        bar_width = 150
-        bar_height = 10
-        # Background
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (80, 80, 80), -1)
-        # Fill
-        fill_width = int(self.volume * bar_width)
-        fill_color = (0, 200, 0) if self.volume_touching else (160, 160, 160)
-        if fill_width > 0:
-            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height), fill_color, -1)
-        # Border
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (255, 255, 255), 1)
-        
-        # Show current pointer angle
-        if hasattr(self, 'current_pointer_angle'):
-            y_pos += 20
-            angle_text = f"Angle: {self.current_pointer_angle:.1f}°"
-            cv2.putText(frame, angle_text, (interface_x, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Draw knobs with MIDI CC info
-        y_pos += 40
-        knob_colors = {
-            'filter': (255, 255, 0),  # Yellow
-            'low': (0, 255, 0),       # Green  
-            'mid': (0, 165, 255),     # Orange
-            'high': (0, 0, 255)       # Red
-        }
-        
-        finger_mapping = {
-            'filter': '1F',
-            'low': '2F', 
-            'mid': '3F',
-            'high': '4F'
-        }
-        
-        cc_mapping = {
-            'filter': 'CC1',
-            'low': 'CC2',
-            'mid': 'CC3',
-            'high': 'CC4'
-        }
-        
-        feedback_values = self.midi_device.get_feedback_values() if self.midi_device else {}
-
-        for knob_name in self.knob_names:
-            knob_value = self.knobs[knob_name]
-            color = knob_colors[knob_name]
-            
-            # Knob label with MIDI CC
-            label = f"{finger_mapping[knob_name]} {knob_name.upper()} ({cc_mapping[knob_name]})"
-            cv2.putText(frame, label, (interface_x, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            
-            # Knob value and MIDI value
-            angle_text = f"{knob_value:+6.1f}°"
-            if self.midi_device:
-                midi_value = self.midi_device.value_to_midi(knob_name, knob_value)
+        # Feature 1-4: EQ and Filter Dials (per hand, hidden unless active)
+        active_knob = self.active_knob or self.active_knob2
+        current_time = time.time()
+        if self.active_knob in ['filter', 'low', 'mid', 'high']:
+            self._last_knob_time1 = current_time
+        if self.active_knob2 in ['filter', 'low', 'mid', 'high']:
+            self._last_knob_time2 = current_time
+        # Left-hand dial (left side) if active recently
+        if self.active_knob in ['filter', 'low', 'mid', 'high'] and (current_time - self._last_knob_time1) < self._knob_timeout:
+            # Choose color and label
+            if self.active_knob == 'filter':
+                color = yellow; label = "FILTER"
+            elif self.active_knob == 'low':
+                color = green; label = "LOW EQ"
+            elif self.active_knob == 'mid':
+                color = orange; label = "MID EQ"
             else:
-                midi_value = 0
-            
-            feedback_val = feedback_values.get(knob_name, 0)
-
-            sent_text = f"Sent:{midi_value:3d}"
-            recv_text = f"Recv:{feedback_val:3d}"
-            
-            cv2.putText(frame, f"{knob_value:.2f}", (interface_x + 120, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-            cv2.putText(frame, sent_text, (interface_x + 180, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-            cv2.putText(frame, recv_text, (interface_x + 250, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 255, 150), 1)
-            
-            # Knob visualization bar
-            bar_x = interface_x + 320
-            bar_y = y_pos - 8
-            bar_width = 60
-            bar_height = 10
-            
-            # Background bar
-            cv2.rectangle(frame, (bar_x, bar_y), 
-                         (bar_x + bar_width, bar_y + bar_height), (100, 100, 100), -1)
-            
-            # Value bar
-            params = self.knob_params[knob_name]
-            normalized_value = (knob_value - params['min']) / params['range']
-            value_width = int(normalized_value * bar_width)
-            if knob_value != params['default']:
-                cv2.rectangle(frame, (bar_x, bar_y), 
-                             (bar_x + value_width, bar_y + bar_height), color, -1)
-            
-            # Center line
-            center_x = bar_x + int((params['default'] - params['min']) / params['range'] * bar_width)
-            cv2.line(frame, (center_x, bar_y), (center_x, bar_y + bar_height), 
-                    (255, 255, 255), 1)
-            
-            # Highlight active knob
-            if self.active_knob == knob_name:
-                cv2.rectangle(frame, (interface_x - 5, y_pos - 12), 
-                             (interface_x + 440, y_pos + 8), (255, 255, 255), 2)
-            
-            y_pos += 25
-
-        # -------------------- Deck 2 UI (right side) --------------------
-        interface2_x = width - 460
-        interface2_y = 30
-        
-        # Background
-        cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
-                     (interface2_x + 440, interface2_y + 340), (40, 40, 40), -1)
-        cv2.rectangle(frame, (interface2_x - 10, interface2_y - 10), 
-                     (interface2_x + 440, interface2_y + 340), (255, 255, 255), 2)
-        
-        # Title
-        cv2.putText(frame, "AI DJ CONTROL + MIDI (Deck 2)", (interface2_x, interface2_y + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        # MIDI Status
-        y2 = interface2_y + 35
-        midi_status2 = "CONNECTED" if self.midi_enabled else "DISCONNECTED"
-        midi_color2 = (0, 255, 0) if self.midi_enabled else (0, 0, 255)
-        cv2.putText(frame, f"MIDI: {midi_status2}", (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, midi_color2, 1)
-        
-        # Gesture info Deck 2
-        y2 += 25
-        finger_text2 = f"Fingers: {self.current_finger_count2}"
-        cv2.putText(frame, finger_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        
-        y2 += 20
-        active_text2 = f"Active: {self.active_knob2 or 'None'}"
-        cv2.putText(frame, active_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        y2 += 20
-        thumbs_up_text2 = f"Thumbs Up: {'YES' if self.thumbs_up_detected2 else 'NO'}"
-        thumbs_up_color2 = (0, 255, 0) if self.thumbs_up_detected2 else (128, 128, 128)
-        cv2.putText(frame, thumbs_up_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, thumbs_up_color2, 1)
-        
-        y2 += 20
-        rockstar_text2 = f"Rockstar: {'YES' if self.effect1_detected2 else 'NO'}"
-        rockstar_color2 = (0, 215, 255) if self.effect1_detected2 else (128, 128, 128)
-        cv2.putText(frame, rockstar_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, rockstar_color2, 1)
-        
-        y2 += 20
-        gesture_text2 = f"Gesture: {'Active' if self.gesture_active2 else 'Inactive'}"
-        cv2.putText(frame, gesture_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if self.gesture_active2 else (255, 100, 100), 1)
-        
-        # Draw knobs with MIDI CC info Deck 2
-
-        knob_colors2 = knob_colors
-        finger_mapping2 = finger_mapping
-        cc_mapping2 = cc_mapping
-        
-        # Deck 2 Volume gesture overlay
-        y2 += 20
-        pinch_text2 = f"Thumb+Index Touch: {'YES' if self.volume2_touching else 'NO'}"
-        pinch_color2 = (0, 255, 0) if self.volume2_touching else (128, 128, 128)
-        cv2.putText(frame, pinch_text2, (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, pinch_color2, 1)
-        y2 += 20
-        cv2.putText(frame, f"Touch Dist: {self.volume2_distance_px:.0f}px", (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y2 += 20
-        cv2.putText(frame, f"Volume: {self.volume2:.2f}", (interface2_x, y2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        bar_x2v = interface2_x + 120
-        bar_y2v = y2 - 10
-        bar_w2v = 150
-        bar_h2v = 10
-        cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + bar_w2v, bar_y2v + bar_h2v), (80, 80, 80), -1)
-        fill_w2v = int(self.volume2 * bar_w2v)
-        fill_c2v = (0, 200, 0) if self.volume2_touching else (160, 160, 160)
-        if fill_w2v > 0:
-            cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + fill_w2v, bar_y2v + bar_h2v), fill_c2v, -1)
-        cv2.rectangle(frame, (bar_x2v, bar_y2v), (bar_x2v + bar_w2v, bar_y2v + bar_h2v), (255, 255, 255), 1)
-        
-        # Show current pointer angle Deck 2
-        if hasattr(self, 'current_pointer_angle2'):
-            y2 += 20
-            angle_text2 = f"Angle: {self.current_pointer_angle2:.1f}°"
-            cv2.putText(frame, angle_text2, (interface2_x, y2), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        y2 += 40
-        for knob_name in self.knob_names:
-            knob_value2 = self.knobs2[knob_name]
-            color2 = knob_colors2[knob_name]
-            
-            label2 = f"{finger_mapping2[knob_name]} {knob_name.upper()} ({cc_mapping2[knob_name]})"
-            cv2.putText(frame, label2, (interface2_x, y2), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color2, 1)
-            if self.midi_device:
-                midi_value2 = self.midi_device.value_to_midi(knob_name, knob_value2)
+                color = magenta; label = "HIGH EQ"
+            # Value
+            knob_value = self.knobs.get(self.active_knob, 0.0)
+            params = self.knob_params.get(self.active_knob, {'min': 0.0, 'range': 1.0})
+            normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
+            # Clamp and map to symmetric -135..+135 around the Y-axis
+            normalized = max(0.0, min(1.0, float(normalized)))
+            # Draw left dial (non-intrusive)
+            center_x, center_y = 140, height // 2
+            radius = 70
+            cv2.circle(frame, (center_x, center_y), radius + 12, (0, 0, 0), -1)
+            cv2.circle(frame, (center_x, center_y), radius + 12, color, 2)
+            angle = 270.0 * normalized - 225.0
+            end_x = int(center_x + (radius - 10) * math.cos(math.radians(angle)))
+            end_y = int(center_y + (radius - 10) * math.sin(math.radians(angle)))
+            cv2.line(frame, (center_x, center_y), (end_x, end_y), color, 3)
+            cv2.circle(frame, (center_x, center_y), 8, color, -1)
+            cv2.putText(frame, label, (center_x - 60, center_y + radius + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        # Right-hand dial (right side) if active recently
+        if self.active_knob2 in ['filter', 'low', 'mid', 'high'] and (current_time - self._last_knob_time2) < self._knob_timeout:
+            if self.active_knob2 == 'filter':
+                color = yellow; label = "FILTER"
+            elif self.active_knob2 == 'low':
+                color = green; label = "LOW EQ"
+            elif self.active_knob2 == 'mid':
+                color = orange; label = "MID EQ"
             else:
-                midi_value2 = 0
+                color = magenta; label = "HIGH EQ"
+            knob_value = self.knobs2.get(self.active_knob2, 0.0)
+            params = self.knob_params.get(self.active_knob2, {'min': 0.0, 'range': 1.0})
+            normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
+            normalized = max(0.0, min(1.0, float(normalized)))
+            center_x, center_y = width - 140, height // 2
+            radius = 70
+            cv2.circle(frame, (center_x, center_y), radius + 12, (0, 0, 0), -1)
+            cv2.circle(frame, (center_x, center_y), radius + 12, color, 2)
+            angle = 270.0 * normalized - 225.0
+            end_x = int(center_x + (radius - 10) * math.cos(math.radians(angle)))
+            end_y = int(center_y + (radius - 10) * math.sin(math.radians(angle)))
+            cv2.line(frame, (center_x, center_y), (end_x, end_y), color, 3)
+            cv2.circle(frame, (center_x, center_y), 8, color, -1)
+            cv2.putText(frame, label, (center_x - 60, center_y + radius + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        # Feature 5: Thumbs Up Play/Stop Buttons per hand (hidden unless active)
+        current_time = time.time()
+        # Left hand (deck1)
+        if self.thumbs_up_detected:
+            if not self._last_thumbs_detection1:
+                if current_time - self._clear_time1 >= self._clear_duration:
+                    self._play_state1 = not self._play_state1
+            self._last_thumbs_detection1 = True
+        else:
+            if self._last_thumbs_detection1:
+                self._clear_time1 = current_time
+            self._last_thumbs_detection1 = False
+        # Right hand (deck2)
+        if self.thumbs_up_detected2:
+            if not self._last_thumbs_detection2:
+                if current_time - self._clear_time2 >= self._clear_duration:
+                    self._play_state2 = not self._play_state2
+            self._last_thumbs_detection2 = True
+        else:
+            if self._last_thumbs_detection2:
+                self._clear_time2 = current_time
+            self._last_thumbs_detection2 = False
+
+        # Draw left button only when left thumbs-up currently detected
+        if self.thumbs_up_detected:
+            center_x, center_y = 140, height // 3
+            if self._play_state1:
+                # Draw play triangle
+                size = 50
+                points = np.array([
+                    [center_x - size, center_y - size],
+                    [center_x - size, center_y + size],
+                    [center_x + size, center_y]
+                ], np.int32)
+                cv2.fillPoly(frame, [points], green)
+                cv2.polylines(frame, [points], True, white, 4)
+                label = "PLAY"
+                color = green
+            else:
+                # Draw stop square
+                size = 45
+                cv2.rectangle(frame, (center_x - size, center_y - size),
+                             (center_x + size, center_y + size), magenta, -1)
+                cv2.rectangle(frame, (center_x - size, center_y - size),
+                             (center_x + size, center_y + size), white, 4)
+                label = "STOP"
+                color = magenta
             
-            cv2.putText(frame, f"{knob_value2:.2f}", (interface2_x + 120, y2),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-            cv2.putText(frame, f"Sent:{midi_value2:3d}", (interface2_x + 180, y2),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            # Label with glow
+            font = cv2.FONT_HERSHEY_DUPLEX
+            font_scale = 1.2
+            thickness = 3
+            (text_width, text_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
+            text_x = center_x - text_width // 2
+            text_y = center_y + 90
             
-            # Knob visualization bar Deck 2
-            bar_x2 = interface2_x + 320
-            bar_y2 = y2 - 8
-            bar_width2 = 60
-            bar_height2 = 10
-            cv2.rectangle(frame, (bar_x2, bar_y2), 
-                         (bar_x2 + bar_width2, bar_y2 + bar_height2), (100, 100, 100), -1)
-            params2 = self.knob_params[knob_name]
-            normalized_value2 = (knob_value2 - params2['min']) / params2['range']
-            value_width2 = int(normalized_value2 * bar_width2)
-            if knob_value2 != params2['default']:
-                cv2.rectangle(frame, (bar_x2, bar_y2), 
-                             (bar_x2 + value_width2, bar_y2 + bar_height2), color2, -1)
-            center_x2 = bar_x2 + int((params2['default'] - params2['min']) / params2['range'] * bar_width2)
-            cv2.line(frame, (center_x2, bar_y2), (center_x2, bar_y2 + bar_height2), 
-                    (255, 255, 255), 1)
-            if self.active_knob2 == knob_name:
-                cv2.rectangle(frame, (interface2_x - 5, y2 - 12), 
-                             (interface2_x + 440, y2 + 8), (255, 255, 255), 2)
-            y2 += 25
+            # Text glow
+            for i in range(3):
+                cv2.putText(frame, label, (text_x - i, text_y - i), font, font_scale, (0, 0, 0), thickness + 2)
+            cv2.putText(frame, label, (text_x, text_y), font, font_scale, color, thickness)
+        # Draw right button only when right thumbs-up currently detected
+        if self.thumbs_up_detected2:
+            center_x, center_y = width - 140, height // 3
+            if self._play_state2:
+                size = 50
+                points = np.array([
+                    [center_x - size, center_y - size],
+                    [center_x - size, center_y + size],
+                    [center_x + size, center_y]
+                ], np.int32)
+                cv2.fillPoly(frame, [points], green)
+                cv2.polylines(frame, [points], True, white, 4)
+                label = "PLAY"; color = green
+            else:
+                size = 45
+                cv2.rectangle(frame, (center_x - size, center_y - size), (center_x + size, center_y + size), magenta, -1)
+                cv2.rectangle(frame, (center_x - size, center_y - size), (center_x + size, center_y + size), white, 4)
+                label = "STOP"; color = magenta
+            font = cv2.FONT_HERSHEY_DUPLEX; font_scale = 1.2; thickness = 3
+            (text_width, text_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
+            text_x = center_x - text_width // 2; text_y = center_y + 90
+            for i in range(3):
+                cv2.putText(frame, label, (text_x - i, text_y - i), font, font_scale, (0,0,0), thickness + 2)
+            cv2.putText(frame, label, (text_x, text_y), font, font_scale, color, thickness)
+
+        # Feature 6: Volume visualization as left/right (restore original slider style)
+        # Left slider appears only when left volume is touching
+        if self.volume_touching:
+            slider_x = 60
+            slider_y = 120
+            slider_height = height - 240
+            slider_width = 20
+            cv2.rectangle(frame, (slider_x - slider_width//2, slider_y), (slider_x + slider_width//2, slider_y + slider_height), (40,40,40), -1)
+            cv2.rectangle(frame, (slider_x - slider_width//2, slider_y), (slider_x + slider_width//2, slider_y + slider_height), cyan, 3)
+            knob_y = int(slider_y + slider_height - (float(self.volume) * slider_height))
+            cv2.circle(frame, (slider_x, knob_y), 18, (0,0,0), -1)
+            cv2.circle(frame, (slider_x, knob_y), 18, cyan, -1)
+            cv2.circle(frame, (slider_x, knob_y), 18, white, 3)
+            cv2.circle(frame, (slider_x, knob_y), 22, cyan, 1)
+            cv2.putText(frame, "VOLUME", (slider_x - 45, slider_y - 20), cv2.FONT_HERSHEY_DUPLEX, 0.8, white, 2)
+            cv2.putText(frame, f"{int(float(self.volume)*100)}%", (slider_x - 20, slider_y + slider_height + 30), cv2.FONT_HERSHEY_DUPLEX, 0.7, cyan, 2)
+        # Right slider appears only when right volume is touching
+        if self.volume2_touching:
+            slider_x = width - 60
+            slider_y = 120
+            slider_height = height - 240
+            slider_width = 20
+            cv2.rectangle(frame, (slider_x - slider_width//2, slider_y), (slider_x + slider_width//2, slider_y + slider_height), (40,40,40), -1)
+            cv2.rectangle(frame, (slider_x - slider_width//2, slider_y), (slider_x + slider_width//2, slider_y + slider_height), cyan, 3)
+            knob_y = int(slider_y + slider_height - (float(self.volume2) * slider_height))
+            cv2.circle(frame, (slider_x, knob_y), 18, (0,0,0), -1)
+            cv2.circle(frame, (slider_x, knob_y), 18, cyan, -1)
+            cv2.circle(frame, (slider_x, knob_y), 18, white, 3)
+            cv2.circle(frame, (slider_x, knob_y), 22, cyan, 1)
+            cv2.putText(frame, "VOLUME", (slider_x - 45, slider_y - 20), cv2.FONT_HERSHEY_DUPLEX, 0.8, white, 2)
+            cv2.putText(frame, f"{int(float(self.volume2)*100)}%", (slider_x - 20, slider_y + slider_height + 30), cv2.FONT_HERSHEY_DUPLEX, 0.7, cyan, 2)
+        
+        # Feature 7: Effect Animation (per hand) with white-tinted logo
+        # Left-hand effect region around left side; right-hand effect on right side.
+        if self.effect1_detected or self.effect1_detected2:
+            # Initialize effect start timing to merge white ball explosion shortly after start
+            if not self._effect_started:
+                self._effect_started = True
+                self._effect_started_time = current_time
+                self._effect_white_burst_done = False
+            # Initialize particles if needed
+            if not hasattr(self, 'effect_particles_left'):
+                self.effect_particles_left = []
+            if not hasattr(self, 'effect_particles_right'):
+                self.effect_particles_right = []
+            
+            # Add new particles
+            import random
+            import random
+            if self.effect1_detected and len(self.effect_particles_left) < 30:
+                for _ in range(5):
+                    particle = {
+                        'x': width // 4 + random.randint(-120, 120),
+                        'y': height // 2 + random.randint(-150, 150),
+                        'size': random.randint(30, 60) if self.logo_img is not None else random.randint(15, 35),
+                        'speed_x': random.randint(-10, 10),
+                        'speed_y': random.randint(-10, 10),
+                        'rotation': random.randint(0, 360),
+                        'rotation_speed': random.randint(-15, 15),
+                        'life': 50,
+                        'opacity': 1.0,
+                        'color': (random.randint(150, 255), random.randint(150, 255), random.randint(150, 255))
+                    }
+                    self.effect_particles_left.append(particle)
+            if self.effect1_detected2 and len(self.effect_particles_right) < 30:
+                for _ in range(5):
+                    particle = {
+                        'x': (3*width) // 4 + random.randint(-120, 120),
+                        'y': height // 2 + random.randint(-150, 150),
+                        'size': random.randint(30, 60) if self.logo_img is not None else random.randint(15, 35),
+                        'speed_x': random.randint(-10, 10),
+                        'speed_y': random.randint(-10, 10),
+                        'rotation': random.randint(0, 360),
+                        'rotation_speed': random.randint(-15, 15),
+                        'life': 50,
+                        'opacity': 1.0,
+                        'color': (random.randint(150, 255), random.randint(150, 255), random.randint(150, 255))
+                    }
+                    self.effect_particles_right.append(particle)
+            
+            # At ~0.1s after effect start, inject additional white ball particles
+            if not self._effect_white_burst_done and (current_time - self._effect_started_time) >= 0.1:
+                for _ in range(10):
+                    if self.effect1_detected:
+                        particle = {
+                            'x': width // 4 + random.randint(-120, 120),
+                            'y': height // 2 + random.randint(-120, 120),
+                            'size': random.randint(20, 35),
+                            'speed_x': random.randint(-12, 12),
+                            'speed_y': random.randint(-12, 12),
+                            'rotation': 0,
+                            'rotation_speed': 0,
+                            'life': 35,
+                            'opacity': 1.0,
+                            'color': (255, 255, 255)
+                        }
+                        self.effect_particles_left.append(particle)
+                    if self.effect1_detected2:
+                        particle = {
+                            'x': (3*width) // 4 + random.randint(-120, 120),
+                            'y': height // 2 + random.randint(-120, 120),
+                            'size': random.randint(20, 35),
+                            'speed_x': random.randint(-12, 12),
+                            'speed_y': random.randint(-12, 12),
+                            'rotation': 0,
+                            'rotation_speed': 0,
+                            'life': 35,
+                            'opacity': 1.0,
+                            'color': (255, 255, 255)
+                        }
+                        self.effect_particles_right.append(particle)
+                self._effect_white_burst_done = True
+
+            # Update and draw particles (left)
+            for particle in list(self.effect_particles_left):
+                particle['x'] += particle['speed_x']
+                particle['y'] += particle['speed_y']
+                particle['rotation'] += particle['rotation_speed']
+                particle['life'] -= 1
+                particle['opacity'] = particle['life'] / 50.0
+                particle['size'] = max(5, particle['size'] - 0.8)
+                
+                if particle['life'] > 0:
+                    x, y = int(particle['x']), int(particle['y'])
+                    size = int(particle['size'])
+                    
+                    if (self.logo_white is not None or self.logo_img is not None) and size > 10:
+                        # Draw rotated logo
+                        try:
+                            # Create rotation matrix
+                            rotation_matrix = cv2.getRotationMatrix2D((size//2, size//2), particle['rotation'], 1)
+                            
+                            # Resize logo to current particle size
+                            base_logo = self.logo_white if self.logo_white is not None else self.logo_img
+                            logo_resized = cv2.resize(base_logo, (size, size))
+                            
+                            # Apply rotation if logo has alpha channel
+                            if logo_resized.shape[2] == 4:
+                                # Split channels
+                                bgr = logo_resized[:, :, :3]
+                                alpha = logo_resized[:, :, 3]
+                                
+                                # Rotate BGR and alpha separately
+                                bgr_rotated = cv2.warpAffine(bgr, rotation_matrix, (size, size))
+                                alpha_rotated = cv2.warpAffine(alpha, rotation_matrix, (size, size))
+                                
+                                # Apply opacity
+                                alpha_rotated = (alpha_rotated * particle['opacity']).astype(np.uint8)
+                                
+                                # Blend with frame
+                                y1, y2 = max(0, y - size//2), min(height, y + size//2)
+                                x1, x2 = max(0, x - size//2), min(width, x + size//2)
+                                
+                                if y2 > y1 and x2 > x1:
+                                    # Adjust for clipping
+                                    logo_y1 = max(0, size//2 - y)
+                                    logo_y2 = logo_y1 + (y2 - y1)
+                                    logo_x1 = max(0, size//2 - x)
+                                    logo_x2 = logo_x1 + (x2 - x1)
+                                    
+                                    # Get regions
+                                    roi = frame[y1:y2, x1:x2]
+                                    logo_region = bgr_rotated[logo_y1:logo_y2, logo_x1:logo_x2]
+                                    alpha_region = alpha_rotated[logo_y1:logo_y2, logo_x1:logo_x2]
+                                    
+                                    # Blend
+                                    alpha_3ch = cv2.cvtColor(alpha_region, cv2.COLOR_GRAY2BGR) / 255.0
+                                    roi[:] = roi * (1 - alpha_3ch) + logo_region * alpha_3ch
+                            else:
+                                # No alpha channel, just draw
+                                y1, y2 = max(0, y - size//2), min(height, y + size//2)
+                                x1, x2 = max(0, x - size//2), min(width, x + size//2)
+                                if y2 > y1 and x2 > x1:
+                                    frame[y1:y2, x1:x2] = cv2.addWeighted(
+                                        frame[y1:y2, x1:x2], 1 - particle['opacity'],
+                                        cv2.resize(logo_resized, (x2-x1, y2-y1)), particle['opacity'], 0
+                                    )
+                        except Exception:
+                            # Fallback to colored circle
+                            cv2.circle(frame, (x, y), size, particle['color'], -1)
+                    else:
+                        # Draw colored circle as fallback
+                        cv2.circle(frame, (x, y), size, particle['color'], -1)
+                        cv2.circle(frame, (x, y), size, white, 2)
+                        
+                        # Add sparkle effect
+                        for i in range(4):
+                            spark_x = x + random.randint(-size//2, size//2)
+                            spark_y = y + random.randint(-size//2, size//2)
+                            cv2.circle(frame, (spark_x, spark_y), 2, white, -1)
+                else:
+                    self.effect_particles_left.remove(particle)
+            # Update and draw particles (right)
+            for particle in list(self.effect_particles_right):
+                particle['x'] += particle['speed_x']
+                particle['y'] += particle['speed_y']
+                particle['rotation'] += particle['rotation_speed']
+                particle['life'] -= 1
+                particle['opacity'] = particle['life'] / 50.0
+                particle['size'] = max(5, particle['size'] - 0.8)
+                if particle['life'] > 0:
+                    x, y = int(particle['x']), int(particle['y'])
+                    size = int(particle['size'])
+                    if (self.logo_white is not None or self.logo_img is not None) and size > 10:
+                        try:
+                            rotation_matrix = cv2.getRotationMatrix2D((size//2, size//2), particle['rotation'], 1)
+                            base_logo = self.logo_white if self.logo_white is not None else self.logo_img
+                            logo_resized = cv2.resize(base_logo, (size, size))
+                            if logo_resized.shape[2] == 4:
+                                bgr = logo_resized[:, :, :3]
+                                alpha = logo_resized[:, :, 3]
+                                bgr_rotated = cv2.warpAffine(bgr, rotation_matrix, (size, size))
+                                alpha_rotated = cv2.warpAffine(alpha, rotation_matrix, (size, size))
+                                alpha_rotated = (alpha_rotated * particle['opacity']).astype(np.uint8)
+                                y1, y2 = max(0, y - size//2), min(height, y + size//2)
+                                x1, x2 = max(0, x - size//2), min(width, x + size//2)
+                                if y2 > y1 and x2 > x1:
+                                    logo_y1 = max(0, size//2 - y)
+                                    logo_y2 = logo_y1 + (y2 - y1)
+                                    logo_x1 = max(0, size//2 - x)
+                                    logo_x2 = logo_x1 + (x2 - x1)
+                                    roi = frame[y1:y2, x1:x2]
+                                    logo_region = bgr_rotated[logo_y1:logo_y2, logo_x1:logo_x2]
+                                    alpha_region = alpha_rotated[logo_y1:logo_y2, logo_x1:logo_x2]
+                                    alpha_3ch = cv2.cvtColor(alpha_region, cv2.COLOR_GRAY2BGR) / 255.0
+                                    roi[:] = roi * (1 - alpha_3ch) + logo_region * alpha_3ch
+                            else:
+                                y1, y2 = max(0, y - size//2), min(height, y + size//2)
+                                x1, x2 = max(0, x - size//2), min(width, x + size//2)
+                                if y2 > y1 and x2 > x1:
+                                    frame[y1:y2, x1:x2] = cv2.addWeighted(
+                                        frame[y1:y2, x1:x2], 1 - particle['opacity'],
+                                        cv2.resize(logo_resized, (x2-x1, y2-y1)), particle['opacity'], 0
+                                    )
+                        except Exception:
+                            cv2.circle(frame, (x, y), size, particle['color'], -1)
+                    else:
+                        cv2.circle(frame, (x, y), size, particle['color'], -1)
+                        cv2.circle(frame, (x, y), size, white, 2)
+                        for i in range(4):
+                            spark_x = x + random.randint(-size//2, size//2)
+                            spark_y = y + random.randint(-size//2, size//2)
+                            cv2.circle(frame, (spark_x, spark_y), 2, white, -1)
+                else:
+                    self.effect_particles_right.remove(particle)
+        else:
+            # Clear particles when effect ends
+            self.effect_particles_left = []
+            self.effect_particles_right = []
+            self._effect_started = False
     
     def draw_optimized_info(self, frame, landmark_data):
         """Draw information overlay"""
@@ -1220,41 +1393,8 @@ class HandDetectorWithMIDI:
         # Draw DJ Control Interface
         self.draw_dj_interface(frame)
         
-        # Draw prominent thumbs up / rockstar messages when detected for each deck
+        # No centered messages; overlays are per-hand only
         height, width = frame.shape[:2]
-        if self.thumbs_up_detected or self.thumbs_up_detected2 or self.effect1_detected or self.effect1_detected2:
-            text = ""
-            if self.effect1_detected or self.effect1_detected2:
-                if self.effect1_detected and self.effect1_detected2:
-                    text = "ROCKSTAR! (DECK 1 & DECK 2)"
-                elif self.effect1_detected:
-                    text = "ROCKSTAR! (DECK 1)"
-                elif self.effect1_detected2:
-                    text = "ROCKSTAR! (DECK 2)"
-            elif self.thumbs_up_detected or self.thumbs_up_detected2:
-                if self.thumbs_up_detected and self.thumbs_up_detected2:
-                    text = "THUMBS UP! (DECK 1 & DECK 2)"
-                elif self.thumbs_up_detected:
-                    text = "THUMBS UP! (DECK 1)"
-                elif self.thumbs_up_detected2:
-                    text = "THUMBS UP! (DECK 2)"
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 2.0
-            thickness = 4
-            
-            # Get text size to center it
-            (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
-            
-            # Center position
-            center_x = (width - text_width) // 2
-            center_y = (height + text_height) // 2
-            
-            # Draw text with outline for better visibility
-            # Black outline
-            cv2.putText(frame, text, (center_x, center_y), font, font_scale, (0, 0, 0), thickness + 2)
-            # Color text
-            color = (0, 215, 255) if text.startswith("ROCKSTAR") else (0, 255, 0)
-            cv2.putText(frame, text, (center_x, center_y), font, font_scale, color, thickness)
         
         return frame
     
@@ -1297,15 +1437,6 @@ class HandDetectorWithMIDI:
         
         frame_count = 0
         
-        # Create window and request always-on-top if supported by OpenCV
-        try:
-            self._window_name = 'AI DJ Hand Control with MIDI'
-            cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-            if hasattr(cv2, 'WND_PROP_TOPMOST'):
-                cv2.setWindowProperty(self._window_name, cv2.WND_PROP_TOPMOST, 1)
-        except Exception:
-            pass
-        
         try:
             while True:
                 ret, frame = cap.read()
@@ -1324,13 +1455,7 @@ class HandDetectorWithMIDI:
                 final_frame = self.draw_optimized_info(annotated_frame, landmark_data)
                 
                 # Display frame
-                try:
-                    win = getattr(self, '_window_name', 'AI DJ Hand Control with MIDI')
-                    cv2.imshow(win, final_frame)
-                    if hasattr(cv2, 'WND_PROP_TOPMOST'):
-                        cv2.setWindowProperty(win, cv2.WND_PROP_TOPMOST, 1)
-                except Exception:
-                    cv2.imshow('AI DJ Hand Control with MIDI', final_frame)
+                cv2.imshow('AI DJ Hand Control with MIDI', final_frame)
                 
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
