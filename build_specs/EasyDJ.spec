@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files
 datas = collect_data_files('mediapipe', include_py_files=False)
 
 a = Analysis(
-    ['app.py'],
+    ['../app.py'],
     pathex=[],
     binaries=[],
     datas=datas,

@@ -1,8 +1,6 @@
-# AI DJ Hand Gesture Control System Overview
+# GesteDJ System Overview
 
-## Project Overview
-
-The AI DJ Hand Gesture Control System is an innovative real-time gesture recognition system that allows DJs to control Mixxx DJ software using hand movements detected through computer vision. Built for HackMIT 2025, this system combines machine learning, computer vision, and MIDI technology to create an intuitive, touchless DJ interface.
+GesteDJ lets you control Mixxx with hand gestures. MediaPipe detects landmarks, OpenCV renders a live preview, and a virtual MIDI device (`AI_DJ_Gestures`) bridges to Mixxx.
 
 ## System Architecture
 
@@ -19,12 +17,12 @@ The system consists of three main components that work together to translate han
 
 ### 1. Hand Detection Module (`app.py`)
 
-**Purpose**: Real-time hand gesture recognition and tracking using computer vision
+**Purpose**: Real-time gesture recognition and on-top preview window
 
 **Key Features**:
 - **MediaPipe Integration**: Uses Google's MediaPipe library for robust hand landmark detection
 - **Gesture Recognition**: Interprets finger counts and hand rotation to control DJ parameters.
-- **Real-Time UI**: An OpenCV window provides real-time visual feedback on gestures, MIDI status, and Mixxx controller state.
+- **Always-on-top UI**: OpenCV window named `GesteDJ` is created with `WND_PROP_TOPMOST` so you can keep Mixxx in view while adjusting.
 
 **Technical Implementation**:
 - **Computer Vision Pipeline**:
@@ -37,7 +35,7 @@ The system consists of three main components that work together to translate han
 
 ### 2. MIDI Translation Module (`utils/midi_virtual_device.py`)
 
-**Purpose**: Converts gesture data into MIDI messages and handles feedback from Mixxx.
+**Purpose**: Creates and manages the virtual instrument `AI_DJ_Gestures`, translating gestures to MIDI and accepting feedback.
 
 **Key Features**:
 - **Virtual MIDI Device**: Creates a system-level MIDI input/output device that Mixxx can connect to.
@@ -47,22 +45,26 @@ The system consists of three main components that work together to translate han
 
 **MIDI Configuration**:
 ```python
-midi_config = {
-    # Knobs are controlled on Channel 1 (0)
-    'filter': {'channel': 0, 'cc': 1, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
-    'low':    {'channel': 0, 'cc': 2, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
-    'mid':    {'channel': 0, 'cc': 3, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
-    'high':   {'channel': 0, 'cc': 4, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
-    # Toggles are on CC 16 & 17
-    'toggle_filter': {'channel': 0, 'cc': 16},
-    'toggle_eq':     {'channel': 0, 'cc': 17},
+midi_control_config = {
+    'filter': {'cc1': 1, 'cc2': 5, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
+    'low':    {'cc1': 2, 'cc2': 6, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    'mid':    {'cc1': 3, 'cc2': 7, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    'high':   {'cc1': 4, 'cc2': 8, 'min_value': 0.0, 'max_value': 4.0, 'default': 1.0},
+    # New volume control (linear 0..1)
+    'volume': {'cc1': 9, 'cc2': 10, 'min_value': 0.0, 'max_value': 1.0, 'default': 0.5},
+    # # Effect routing (binary normal CC to keep group_[ChannelN]_enable ON)
+}
+midi_toggle_config = {
+    'play':   {'cc1': 0x12, 'cc2': 0x13, 'toggle_value': 127},
+    # Effect enabled toggle (EffectUnitN_Effect1.enabled)
+    'effect1': {'cc1': 0x16, 'cc2': 0x17, 'toggle_value': 127},
 }
 # Feedback is received on Channel 2 (1)
 ```
 
 ### 3. Mixxx Integration (`mixxx_utils/AI_DJ_Gestures.midi.xml`)
 
-**Purpose**: Maps MIDI messages to specific DJ controls in Mixxx software.
+**Purpose**: Provides the mapping Mixxx loads to bind controls to our MIDI messages.
 
 **Key Features**:
 - **Custom MIDI Mapping**: XML configuration file that defines all input controls and output feedback.
@@ -74,30 +76,30 @@ midi_config = {
 
 The data flow is a complete loop:
 
-1.  **Input (Python -> Mixxx)**:
-    `Camera -> OpenCV -> MediaPipe -> Gesture Analysis -> MIDI CC Message -> Virtual MIDI Device -> Mixxx`
-2.  **Feedback (Mixxx -> Python)**:
-    `Mixxx Control Change -> XML Output Mapping -> MIDI CC Message -> Virtual MIDI Device -> Python UI`
+1.  Input (Python → Mixxx): `Camera → MediaPipe → Gesture Analysis → MIDI CC → AI_DJ_Gestures → Mixxx`
+2.  Feedback (Mixxx → Python): `Mixxx → XML mapping → MIDI CC → AI_DJ_Gestures → UI overlay`
 
-## Gesture Control Mapping
+## Gesture Control Mapping (from code and XML)
 
 The gesture system is based on the number of fingers being held up. Once a control is selected, rotating your hand modifies the value.
 
--   **0 Fingers (Fist)**: Toggles the Filter and EQ effect racks on or off. You must enable the effects before the other controls will work.
--   **1 Finger**: Selects the **Filter**. Rotate your hand to control the high/low-pass filter.
--   **2 Fingers**: Selects the **Low EQ**. Rotate your hand to control the bass frequencies.
--   **3 Fingers**: Selects the **Mid EQ**. Rotate your hand to control the midrange frequencies.
--   **4 Fingers**: Selects the **High EQ**. Rotate your hand to control the treble frequencies.
+-   1 finger (index only): Filter → `QuickEffectRack1_*:super1` (CC 1 / CC 5)
+-   2 fingers (index+middle): Low EQ → `EqualizerRack1_*_Effect1:parameter1` (CC 2 / CC 6)
+-   3 fingers (index+middle+ring): Mid EQ → `EqualizerRack1_*_Effect1:parameter2` (CC 3 / CC 7)
+-   4 fingers (index+middle+ring+pinky): High EQ → `EqualizerRack1_*_Effect1:parameter3` (CC 4 / CC 8)
+-   Pinch (thumb–index) with middle+ring+pinky extended: Channel Volume (CC 9 / CC 10)
+-   Rockstar (index + pinky only): Enable Effect 1 (CC 0x16 / 0x17)
+-   Thumbs up: Play/Pause toggle (CC 0x12 / 0x13)
 
 ## File Structure
 
 ```
 /
-├── app.py                            # Main hand detection and UI application
+├── app.py                            # Main detection + UI (always-on-top)
 ├── utils/
 │   └── midi_virtual_device.py      # Virtual MIDI device implementation
 ├── mixxx_utils/
-│   └── AI_DJ_Gestures.midi.xml     # Mixxx MIDI mapping configuration
+│   └── AI_DJ_Gestures.midi.xml     # Mixxx MIDI mapping
 ├── tests/
 │   └── quick_test.py               # System testing utilities
 ├── requirements.txt                  # Python dependencies
@@ -106,8 +108,9 @@ The gesture system is based on the number of fingers being held up. Once a contr
 └── SYSTEM_OVERVIEW.md               # This system overview document
 ```
 
-## Development Notes
-
-This system was developed for HackMIT 2025 as a proof-of-concept for gesture-based DJ control. The architecture is designed for extensibility and real-world performance, with careful attention to latency, accuracy, and user experience.
-
-The codebase demonstrates advanced integration of computer vision, real-time audio processing, and human-computer interaction principles, making it suitable for both educational study and practical DJ applications.
+## Using with Mixxx (first time)
+1. Start GesteDJ to create `AI_DJ_Gestures`.
+2. Open Mixxx → Preferences → Controllers and verify the device is visible and enabled.
+3. Use **Learning Wizard** to map at least one control by performing the matching gesture.
+4. Open the **User Mapping Folder** and copy `mixxx_utils/AI_DJ_Gestures.midi.xml` there.
+5. Restart Mixxx.

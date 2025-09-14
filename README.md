@@ -1,88 +1,60 @@
-# Real-Time Hand Landmark Detection
+## GesteDJ — Gesture-Controlled DJ for Mixxx
 
-This project implements real-time hand landmark detection using Google's MediaPipe library with OpenCV for video processing.
+GesteDJ uses MediaPipe and OpenCV to detect hand gestures and drives a virtual MIDI instrument named `AI_DJ_Gestures` that Mixxx can learn and control. A simple on-screen preview shows what the system sees and stays on top while you perform.
 
-## Features
+### Features
+- **Real-time gestures**: up to two hands with 21 landmarks
+- **Virtual MIDI device**: bi-directional port `AI_DJ_Gestures`
+- **EQ/Filter/Volume control** via finger-count + rotation
+- **Always-on-top preview window** for quick feedback
 
-- **Real-time hand detection** with up to 2 hands simultaneously
-- **21 hand landmarks** per hand with MediaPipe's hand landmark model
-- **Optimized performance** with minimal lag
-- **Live coordinate display** showing x, y, z positions of key landmarks
-- **FPS monitoring** and performance metrics
-- **Interactive controls** for customization
+### Requirements
+- macOS with a webcam
+- Python 3.11 (project ships with a `venv/` folder)
 
-## Files
-
-- `hand_detection.py` - Basic implementation with full features
-- `hand_detection_optimized.py` - Performance-optimized version with controls
-- `requirements.txt` - Python dependencies
-
-## Installation
-
-1. Install Python dependencies:
+### Install
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Run the hand detection:
+### Run (dev)
 ```bash
-# Basic version
-python hand_detection.py
-
-# Optimized version (recommended)
-python hand_detection_optimized.py
+python app.py
 ```
 
-## Controls (Optimized Version)
+### Build a macOS App
+```bash
+zsh build_macos_app.sh
+```
+This generates `dist/GesteDJ.app`. The script also auto-rounds the app icon into a macOS squircle.
 
-- **'q'** - Quit the application
-- **'c'** - Toggle console output of landmark coordinates
-- **'a'** - Toggle display of all 21 landmarks vs key landmarks only
-- **'s'** - Save current frame as image
+### First-time Mixxx Integration (do this once)
+1. **Start GesteDJ** to create the MIDI device `AI_DJ_Gestures`.
+2. **Open Mixxx** → Preferences → Controllers. You should see `AI_DJ_Gestures` listed for Input and Output.
+3. Click **Learning Wizard** and map any effect you plan to use (for example: Deck 1 → Volume Fader). Perform the matching hand gesture while learning. This creates a user mapping `.xml` and `.js` in Mixxx’s user mapping folder.
+4. Back in Preferences → Controllers, click **Open User Mapping Folder** and copy our mapping file `mixxx_utils/AI_DJ_Gestures.midi.xml` into that folder. Overwrite or disable the auto-generated mapping if prompted.
+5. **Restart Mixxx**. You’re ready to play.
 
-## Key Landmarks Tracked
+### Gestures (as implemented)
+- **1 finger (index only)**: Filter
+- **2 fingers (index+middle)**: Low EQ
+- **3 fingers (index+middle+ring)**: Mid EQ
+- **4 fingers (index+middle+ring+pinky)**: High EQ
+- **Pinch (thumb–index) with middle+ring+pinky extended)**: Volume. Move pinch midpoint up/down to change channel volume.
+- **Rockstar (index + pinky only)**: Toggle Effect 1 enabled for the deck.
+- **Thumbs up**: Toggle Play/Pause for the deck.
 
-The system tracks these important hand landmarks:
+Notes
+- Raw MediaPipe labels are mirrored after frame flip: raw 'Left' → Deck 1, raw 'Right' → Deck 2.
+- Rotate your hand to change the active knob; values are smoothed and sent at 30 Hz.
 
-1. **Wrist (0)** - Base of the hand
-2. **Thumb Tip (4)** - Tip of the thumb
-3. **Index Tip (8)** - Tip of the index finger
-4. **Middle Tip (12)** - Tip of the middle finger
-5. **Ring Tip (16)** - Tip of the ring finger
-6. **Pinky Tip (20)** - Tip of the pinky finger
+### Controls in the app
+- Press `q` to quit
+- Press `c` to toggle console output
+- Press `a` to toggle full landmark draw
+- Press `s` to save a frame
 
-## Performance Optimizations
-
-- **Model complexity**: Uses lightweight model (complexity=0)
-- **Camera settings**: Optimized resolution, FPS, and buffer size
-- **Frame processing**: Efficient landmark extraction and display
-- **Selective rendering**: Option to show only key landmarks
-- **FPS averaging**: Smooth performance metrics
-
-## MediaPipe Hand Landmark Model
-
-This implementation uses Google's MediaPipe hand landmark detection which provides:
-- 21 3D hand landmarks per hand
-- Real-time performance on standard hardware
-- Robust tracking across various lighting conditions
-- Palm detection and hand landmark localization
-
-## Coordinate System
-
-- **x, y**: Pixel coordinates in the video frame
-- **z**: Relative depth (negative values closer to camera)
-- **Normalized coordinates**: Available in range [0, 1] relative to image dimensions
-
-## Troubleshooting
-
-- **Camera not found**: Ensure your webcam is connected and not used by other applications
-- **Poor performance**: Try the optimized version or reduce video resolution
-- **Detection issues**: Ensure good lighting and clear hand visibility
-- **Import errors**: Make sure all dependencies are installed correctly
-
-## References
-
-- [MediaPipe Hand Landmark Documentation](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
-- [MediaPipe Hand Detection Paper](https://arxiv.org/pdf/2006.10214)
-- [MediaPipe GitHub Repository](https://github.com/google-ai-edge/mediapipe)
-
+### Troubleshooting
+- **No `AI_DJ_Gestures` in Mixxx**: Make sure GesteDJ is running first.
+- **Camera permissions**: Allow camera access for GesteDJ/GesteDJ.app in macOS settings.
+- **Mapping missing**: Re-run the Learning Wizard, then paste `AI_DJ_Gestures.midi.xml` into the User Mapping Folder and restart Mixxx.

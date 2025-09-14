@@ -79,7 +79,7 @@ class HandDetectorWithMIDI:
         self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
 
-        self.knob_max_angle = 160
+        self.knob_max_angle = 150
         
         # Deck 2 mirrors (do not change original deck 1 state)
         self.knobs2 = {k: v['default'] for k, v in self.knob_params.items()}
@@ -605,7 +605,7 @@ class HandDetectorWithMIDI:
                 bend01 = math.degrees(math.acos(np.clip(safe_cos(s0, s1), -1.0, 1.0)))
                 bend12 = math.degrees(math.acos(np.clip(safe_cos(s1, s2), -1.0, 1.0)))
                 curvature = bend01 + bend12
-                angle_threshold = 40.0
+                angle_threshold = 30.0
                 is_straight = curvature < angle_threshold
                 r_mcp = np.linalg.norm(mcp - wrist)
                 r_pip = np.linalg.norm(pip - wrist)
@@ -863,21 +863,28 @@ class HandDetectorWithMIDI:
             # Extract X and Y for required indices
             thumb_indices = [0, 1, 2, 3, 4]
             other_indices = list(range(5, 21))
+            knuckles_indices = [5, 9, 13, 17]
 
             thumb_x = [landmarks[i].x for i in thumb_indices]
             other_x = [landmarks[i].x for i in other_indices]
+            knuckles_x = [landmarks[i].x for i in knuckles_indices]
 
             thumb_y = [landmarks[i].y for i in thumb_indices]
+            knuckles_y = [landmarks[i].y for i in knuckles_indices]
 
             # X-side constraint (deck-specific, no other allowance)
             all_left = max(thumb_x) < min(other_x)
             all_right = min(thumb_x) > max(other_x)
+
+            left_of_knuckles = max(thumb_x) < min(knuckles_x)
+            right_of_knuckles = min(thumb_x) > max(knuckles_x)
+
             if handedness == 'Left':
                 # Deck 1 must be LEFT of others
-                x_side_ok = all_left
+                x_side_ok = left_of_knuckles
             elif handedness == 'Right':
                 # Deck 2 must be RIGHT of others
-                x_side_ok = all_right
+                x_side_ok = right_of_knuckles
             else:
                 x_side_ok = False
 
@@ -1010,7 +1017,7 @@ class HandDetectorWithMIDI:
                     db = 20 * math.log10(knob_value)
                 
                 # Linear mapping in dB space and map to 0-1 range
-                normalized = max(0, min(1, ((db + 24) / 48 )))
+                normalized = max(0, min(1, ((db + 12) / 24 )))
 
             else:
                 params = self.knob_params.get(self.active_knob, {'min': 0.0, 'range': 1.0})
@@ -1048,7 +1055,7 @@ class HandDetectorWithMIDI:
                     db = 20 * math.log10(knob_value)
                 
                 # Linear mapping in dB space and map to 0-1 range
-                normalized = max(0, min(1, ((db + 24) / 48 )))
+                normalized = max(0, min(1, ((db + 12) / 24 )))
             else:
                 params = self.knob_params.get(self.active_knob2, {'min': 0.0, 'range': 1.0})
                 normalized = (knob_value - params['min']) / max(params['range'], 1e-6)
@@ -1430,6 +1437,17 @@ class HandDetectorWithMIDI:
         """Main loop with MIDI integration"""
         # Initialize camera
         cap = cv2.VideoCapture(0)
+
+        # Ensure the preview window stays on top across applications.
+        # macOS HighGUI supports WND_PROP_TOPMOST; create the window explicitly
+        # and set the property before the main loop.
+        try:
+            cv2.namedWindow('GesteDJ', cv2.WINDOW_NORMAL)
+            if hasattr(cv2, 'WND_PROP_TOPMOST'):
+                cv2.setWindowProperty('GesteDJ', cv2.WND_PROP_TOPMOST, 1)
+        except Exception:
+            # If HighGUI backend does not support this, continue gracefully
+            pass
         
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -1483,7 +1501,7 @@ class HandDetectorWithMIDI:
                 final_frame = self.draw_optimized_info(annotated_frame, landmark_data)
                 
                 # Display frame
-                cv2.imshow('AI DJ Hand Control with MIDI', final_frame)
+                cv2.imshow('GesteDJ', final_frame)
                 
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
