@@ -1,0 +1,74 @@
+# OS & Editors
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace
+.history/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Node/JS
+**/node_modules/
+.eslintcache
+.parcel-cache/
+.turbo/
+
+# Build artifacts (explicit subpaths)
+gestdj-ui/build/
+gestdj-ui/src-tauri/target/
+gestdj-ui/src-tauri/**/bundle/
+
+# Additional build artifacts
+dist/
+out/
+
+# Test artifacts (JS)
+**/.nyc_output/
+**/.jest/
+**/.jest-cache/
+**/playwright-report/
+**/test-results/
+**/cypress/screenshots/
+**/cypress/videos/
+**/cypress/downloads/
+
+# Python tooling
+.tox/
+.nox/
+.hypothesis/
+pip-wheel-metadata/
+.cache/
+
+# Tauri release dir
+gestdj-ui/src-tauri/release/
+
+# macOS debug symbols
+*.dSYM/
+
+# Coverage folders at repo root
+coverage/
+

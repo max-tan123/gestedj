@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Video Capture → Backend Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #282c34;
+            color: white;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+        .controls {
+            flex: 1;
+            min-width: 350px;
+        }
+        .video-container {
+            flex: 1;
+            text-align: center;
+        }
+        video, canvas {
+            max-width: 100%;
+            border: 2px solid #444;
+            border-radius: 8px;
+            background-color: #111;
+            margin: 5px;
+        }
+        button {
+            padding: 10px 15px;
+            margin: 5px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .connect-btn { background-color: #4CAF50; color: white; }
+        .video-btn { background-color: #2196F3; color: white; }
+        .stream-btn { background-color: #FF9800; color: white; }
+        .latency-btn { background-color: #9C27B0; color: white; }
+        button:disabled { background-color: #666; cursor: not-allowed; }
+        .results {
+            background-color: #f5f5f5;
+            color: #333;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .stats {
+            background-color: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .excellent { color: #4CAF50; }
+        .good { color: #FF9800; }
+        .poor { color: #F44336; }
+        .step {
+            background-color: #333;
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #4CAF50;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📹 Frontend Video Capture → Backend Latency Test</h1>
+    <p>Testing realistic video streaming: Browser captures video → sends to Python backend</p>
+
+    <div class="container">
+        <div class="controls">
+            <div class="step">
+                <h3>Step 1: Connect to Backend</h3>
+                <button id="connectBtn" class="connect-btn">Connect to Python Server</button>
+                <p id="connectionStatus">Not connected</p>
+            </div>
+
+            <div class="step">
+                <h3>Step 2: Start Camera</h3>
+                <button id="cameraBtn" class="video-btn" disabled>Start Camera</button>
+                <p id="cameraStatus">Camera not started</p>
+            </div>
+
+            <div class="step">
+                <h3>Step 3: Stream to Backend</h3>
+                <button id="streamBtn" class="stream-btn" disabled>Start Video Streaming</button>
+                <p id="streamStatus">Not streaming</p>
+            </div>
+
+            <div class="step">
+                <h3>Step 4: Test Latency</h3>
+                <button id="latencyBtn" class="latency-btn" disabled>Test Video Latency</button>
+                <p id="testStatus"></p>
+            </div>
+
+            <div id="results" class="results" style="display: none;">
+                <h4>Video Streaming Latency:</h4>
+                <p id="avgLatency"></p>
+                <p id="minLatency"></p>
+                <p id="maxLatency"></p>
+                <p><small id="testCount"></small></p>
+            </div>
+
+            <div class="stats">
+                <div><strong>Streaming Stats:</strong></div>
+                <div>Frames sent: <span id="framesSent">0</span></div>
+                <div>Backend responses: <span id="backendResponses">0</span></div>
+                <div>Current FPS: <span id="fpsDisplay">0</span></div>
+                <div>Data sent: <span id="dataSent">0 KB</span></div>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <h3>Live Camera Feed</h3>
+            <video id="videoElement" width="320" height="240" autoplay muted></video>
+            <br>
+            <canvas id="captureCanvas" width="320" height="240" style="display: none;"></canvas>
+            <p><small>320x240 capture → WebSocket → Python backend</small></p>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let videoStream = null;
+        let streaming = false;
+        let framesSent = 0;
+        let backendResponses = 0;
+        let captureInterval = null;
+        let fpsCounter = 0;
+        let fpsInterval = null;
+        let totalDataSent = 0;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const cameraBtn = document.getElementById('cameraBtn');
+        const streamBtn = document.getElementById('streamBtn');
+        const latencyBtn = document.getElementById('latencyBtn');
+        const videoElement = document.getElementById('videoElement');
+        const captureCanvas = document.getElementById('captureCanvas');
+        const ctx = captureCanvas.getContext('2d');
+
+        connectBtn.addEventListener('click', connectToServer);
+        cameraBtn.addEventListener('click', startCamera);
+        streamBtn.addEventListener('click', toggleStreaming);
+        latencyBtn.addEventListener('click', testVideoLatency);
+
+        function connectToServer() {
+            document.getElementById('connectionStatus').textContent = 'Connecting...';
+            connectBtn.disabled = true;
+
+            try {
+                ws = new WebSocket('ws://localhost:8765');
+
+                ws.onopen = () => {
+                    document.getElementById('connectionStatus').textContent = '✅ Connected to backend';
+                    document.getElementById('connectionStatus').className = 'excellent';
+                    cameraBtn.disabled = false;
+                };
+
+                ws.onmessage = handleBackendMessage;
+
+                ws.onerror = () => {
+                    document.getElementById('connectionStatus').textContent = '❌ Backend connection failed';
+                    document.getElementById('connectionStatus').className = 'poor';
+                    connectBtn.disabled = false;
+                };
+
+                ws.onclose = () => {
+                    document.getElementById('connectionStatus').textContent = 'Connection closed';
+                    cameraBtn.disabled = true;
+                    streamBtn.disabled = true;
+                    latencyBtn.disabled = true;
+                    connectBtn.disabled = false;
+                };
+
+            } catch (error) {
+                document.getElementById('connectionStatus').textContent = '❌ WebSocket error';
+                connectBtn.disabled = false;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                document.getElementById('cameraStatus').textContent = 'Requesting camera access...';
+
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: 320,
+                        height: 240,
+                        frameRate: 30
+                    },
+                    audio: false
+                });
+
+                videoElement.srcObject = videoStream;
+                document.getElementById('cameraStatus').textContent = '✅ Camera active';
+                document.getElementById('cameraStatus').className = 'excellent';
+                streamBtn.disabled = false;
+
+            } catch (error) {
+                document.getElementById('cameraStatus').textContent = '❌ Camera access failed';
+                document.getElementById('cameraStatus').className = 'poor';
+                console.error('Camera error:', error);
+            }
+        }
+
+        function toggleStreaming() {
+            if (!streaming) {
+                startVideoStreaming();
+            } else {
+                stopVideoStreaming();
+            }
+        }
+
+        function startVideoStreaming() {
+            streaming = true;
+            streamBtn.textContent = 'Stop Streaming';
+            document.getElementById('streamStatus').textContent = '📹 Streaming to backend...';
+            document.getElementById('streamStatus').className = 'excellent';
+            latencyBtn.disabled = false;
+
+            // Start capturing and sending frames
+            captureInterval = setInterval(captureAndSendFrame, 1000/15); // 15 FPS
+
+            // Start FPS counter
+            fpsCounter = 0;
+            fpsInterval = setInterval(() => {
+                document.getElementById('fpsDisplay').textContent = fpsCounter;
+                fpsCounter = 0;
+            }, 1000);
+        }
+
+        function stopVideoStreaming() {
+            streaming = false;
+            streamBtn.textContent = 'Start Video Streaming';
+            document.getElementById('streamStatus').textContent = 'Streaming stopped';
+            document.getElementById('streamStatus').className = '';
+            latencyBtn.disabled = true;
+
+            if (captureInterval) {
+                clearInterval(captureInterval);
+                captureInterval = null;
+            }
+
+            if (fpsInterval) {
+                clearInterval(fpsInterval);
+                fpsInterval = null;
+            }
+        }
+
+        function captureAndSendFrame() {
+            if (!videoStream || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            // Draw video frame to canvas
+            ctx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+
+            // Convert canvas to base64 JPEG
+            const frameData = captureCanvas.toDataURL('image/jpeg', 0.8);
+            const base64Data = frameData.split(',')[1]; // Remove data:image/jpeg;base64,
+
+            // Send frame with timestamp
+            const message = {
+                type: 'frontend_video_frame',
+                frame_data: base64Data,
+                client_timestamp: performance.now(),
+                frame_number: framesSent
+            };
+
+            ws.send(JSON.stringify(message));
+            framesSent++;
+            fpsCounter++;
+
+            // Update stats
+            document.getElementById('framesSent').textContent = framesSent;
+            totalDataSent += base64Data.length / 1024; // KB
+            document.getElementById('dataSent').textContent = Math.round(totalDataSent) + ' KB';
+        }
+
+        function handleBackendMessage(event) {
+            const data = JSON.parse(event.data);
+            console.log('Backend response:', data.type, data);
+
+            if (data.type === 'video_frame_received') {
+                backendResponses++;
+                document.getElementById('backendResponses').textContent = backendResponses;
+
+                // Calculate round-trip latency
+                if (data.client_timestamp) {
+                    const latency = performance.now() - data.client_timestamp;
+                    console.log(`Frame latency: ${Math.round(latency)}ms`);
+                }
+            } else if (data.type === 'latency_response') {
+                handleLatencyResponse(data);
+            }
+        }
+
+        async function testVideoLatency() {
+            if (!streaming) {
+                alert('Please start video streaming first');
+                return;
+            }
+
+            latencyBtn.disabled = true;
+            document.getElementById('testStatus').textContent = 'Testing video latency...';
+            document.getElementById('results').style.display = 'none';
+
+            const latencies = [];
+            const testCount = 20;
+            let completedTests = 0;
+
+            const runSingleTest = () => {
+                return new Promise((resolve) => {
+                    const startTime = performance.now();
+
+                    // Capture current frame and send with latency test marker
+                    ctx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+                    const frameData = captureCanvas.toDataURL('image/jpeg', 0.8);
+                    const base64Data = frameData.split(',')[1];
+
+                    const testMessage = {
+                        type: 'video_latency_test',
+                        frame_data: base64Data,
+                        timestamp: startTime,
+                        test_id: `test_${completedTests}`
+                    };
+
+                    const messageHandler = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'video_latency_response' &&
+                            data.test_id === `test_${completedTests}`) {
+
+                            ws.removeEventListener('message', messageHandler);
+                            const receiveTime = performance.now();
+                            const roundTripTime = receiveTime - startTime;
+                            latencies.push(roundTripTime);
+                            completedTests++;
+
+                            document.getElementById('testStatus').textContent =
+                                `Testing... ${completedTests}/${testCount}`;
+                            resolve();
+                        }
+                    };
+
+                    ws.addEventListener('message', messageHandler);
+                    ws.send(JSON.stringify(testMessage));
+                });
+            };
+
+            // Run all tests
+            for (let i = 0; i < testCount; i++) {
+                await runSingleTest();
+                await new Promise(resolve => setTimeout(resolve, 100)); // 100ms between tests
+            }
+
+            // Calculate and display results
+            const min = Math.min(...latencies);
+            const max = Math.max(...latencies);
+            const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
+
+            const avgRounded = Math.round(avg * 100) / 100;
+            const minRounded = Math.round(min * 100) / 100;
+            const maxRounded = Math.round(max * 100) / 100;
+
+            document.getElementById('avgLatency').innerHTML =
+                `<strong>Average:</strong> ${avgRounded}ms ${getPerformanceEmoji(avgRounded)}`;
+            document.getElementById('minLatency').innerHTML =
+                `<strong>Min:</strong> ${minRounded}ms`;
+            document.getElementById('maxLatency').innerHTML =
+                `<strong>Max:</strong> ${maxRounded}ms`;
+            document.getElementById('testCount').textContent =
+                `(${testCount} video frames tested)`;
+
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('testStatus').textContent =
+                `✅ Video latency test complete: ${avgRounded}ms average`;
+            latencyBtn.disabled = false;
+
+            // Color code results
+            const avgElement = document.getElementById('avgLatency');
+            avgElement.className = avgRounded < 30 ? 'excellent' :
+                                   avgRounded < 50 ? 'good' : 'poor';
+        }
+
+        function handleLatencyResponse(data) {
+            // Handled in testVideoLatency function
+        }
+
+        function getPerformanceEmoji(avg) {
+            if (avg < 30) return '🟢 Excellent';
+            if (avg < 50) return '🟡 Good';
+            return '🔴 Consider optimization';
+        }
+    </script>
+</body>
+</html>

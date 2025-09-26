@@ -79,7 +79,7 @@ class HandDetectorWithMIDI:
         self.knobs = {k: v['default'] for k, v in self.knob_params.items()}
         self.knob_names = ['filter', 'low', 'mid', 'high']
 
-        self.knob_max_angle = 150
+        self.knob_max_angle = 155
         
         # Deck 2 mirrors (do not change original deck 1 state)
         self.knobs2 = {k: v['default'] for k, v in self.knob_params.items()}
@@ -539,7 +539,7 @@ class HandDetectorWithMIDI:
                     total_curvature = bend_angle_01 + bend_angle_12
                     
                     # Check if finger is straight enough (curvature approach)
-                    angle_threshold = 40.0  # degrees
+                    angle_threshold = 35.0  # degrees
                     is_straight = total_curvature < angle_threshold
                     
                     # Check radial monotonicity (tip farther from wrist than base)
