@@ -1,22 +1,21 @@
-# Core dependencies for GesteDJ Web Backend
+# GesteDJ Web UI - Production Dependencies
+# Core dependencies for web-based interface with WebSocket backend
+
+# WebSocket server
 websockets>=11.0.0
-numpy>=1.24.0
-opencv-python>=4.8.0
 
-# MediaPipe for hand detection
+# Computer vision and hand detection
 mediapipe>=0.10.0
+opencv-python>=4.8.0
+numpy>=1.24.0
 
-# MIDI dependencies
+# MIDI device control
 python-rtmidi>=1.5.0
 mido>=1.3.0
 
-# Additional utilities
-scipy>=1.10.0
-matplotlib>=3.7.0
-
-# Optional: For better performance
-uvloop>=0.17.0; sys_platform != "win32"
-
-# Development and testing
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+# Installation instructions:
+# pip install -r requirements.txt
+#
+# Development/testing (optional):
+# pip install pytest pytest-asyncio
+# pip install matplotlib scipy  # For visualization/debugging
