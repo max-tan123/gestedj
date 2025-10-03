@@ -3,6 +3,7 @@ HackMIT/
 venv/
 env/
 .env
+.venv/
 
 # Python cache files
 __pycache__/
@@ -10,6 +11,15 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # OS generated files
 .DS_Store
@@ -25,6 +35,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+*.code-workspace
+.history/
 
 # Temporary files
 *.tmp
@@ -32,31 +44,61 @@ Thumbs.db
 
 # Log files
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Package files
 *.egg-info/
 dist/
 build/
+out/
 
-
-# dependencies
-/node_modules
+# Node/JavaScript dependencies
+node_modules/
+**/node_modules/
 /.pnp
 .pnp.js
+.eslintcache
+.parcel-cache/
+.turbo/
 
-# testing
+# Testing
 /coverage
+coverage/
+.nyc_output/
+.jest/
+.jest-cache/
+playwright-report/
+test-results/
+cypress/screenshots/
+cypress/videos/
+cypress/downloads/
 
-# production
+# Production builds
 /build
 
-# misc
-.DS_Store
+# Environment files
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
 
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# TypeScript
+*.tsbuildinfo
+
+# Electron specific
+app/
+release/
+
+# macOS debug symbols
+*.dSYM/
+
+# Python tooling
+.tox/
+.nox/
+.hypothesis/
+pip-wheel-metadata/
+.cache/
