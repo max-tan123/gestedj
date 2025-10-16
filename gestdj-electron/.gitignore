@@ -19,9 +19,12 @@ dist/
 # Editor files
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
+CLAUDE.md
+*/CLAUDE.md
 
 # OS files
 .DS_Store

@@ -37,10 +37,14 @@ Thumbs.db
 *.swo
 *.code-workspace
 .history/
-
 # Temporary files
 *.tmp
 *.temp
+
+# Claude files.claude/
+.claude/
+CLAUDE.md
+*/CLAUDE.md
 
 # Log files
 *.log
