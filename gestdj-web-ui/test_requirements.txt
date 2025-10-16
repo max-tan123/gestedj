@@ -1,2 +1,0 @@
-# Requirements for the test WebSocket server
-websockets>=11.0.0

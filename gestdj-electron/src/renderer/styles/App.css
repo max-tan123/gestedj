@@ -43,6 +43,19 @@
   width: 100%;
 }
 
+.camera-section {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.camera-section h2 {
+  margin-bottom: 1.5rem;
+  color: #4ecdc4;
+}
+
 .backend-control {
   background: rgba(255, 255, 255, 0.05);
   border-radius: 12px;

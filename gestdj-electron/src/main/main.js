@@ -21,20 +21,47 @@ class PythonBackend {
     }
 
     try {
-      // Look for Python backend in parent directory
-      const pythonScript = join(__dirname, '../../../gestdj-web-ui/app.py');
+      // Look for Python backend in gestdj-electron/python-backend/
+      const pythonScript = join(__dirname, '../../python-backend/gesture_processor.py');
+      const pythonCwd = join(__dirname, '../../python-backend');
 
-      this.process = spawn('python3', [pythonScript], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: join(__dirname, '../../../gestdj-web-ui')
+      // Use bundled venv Python (for development)
+      // TODO: Switch to PyInstaller binary for production builds
+      const pythonExecutable = join(__dirname, '../../python-backend/venv/bin/python3');
+
+      console.log('Starting Python backend:', pythonScript);
+      console.log('Python executable:', pythonExecutable);
+      console.log('Working directory:', pythonCwd);
+
+      this.process = spawn(pythonExecutable, [pythonScript], {
+        stdio: ['pipe', 'pipe', 'pipe'],  // Enable stdin piping
+        cwd: pythonCwd
       });
 
       this.process.stdout.on('data', (data) => {
-        console.log('Python stdout:', data.toString());
-        // Send updates to renderer
-        if (mainWindow) {
-          mainWindow.webContents.send('python-log', data.toString());
-        }
+        const output = data.toString();
+        console.log('Python stdout:', output);
+
+        // Try to parse as JSON for gesture updates
+        const lines = output.split('\n');
+        lines.forEach(line => {
+          if (line.trim()) {
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.type === 'gesture_update') {
+                // Send gesture update to renderer
+                if (mainWindow) {
+                  mainWindow.webContents.send('gesture-update', parsed);
+                }
+              }
+            } catch (e) {
+              // Not JSON, send as regular log
+              if (mainWindow) {
+                mainWindow.webContents.send('python-log', line);
+              }
+            }
+          }
+        });
       });
 
       this.process.stderr.on('data', (data) => {
@@ -172,6 +199,18 @@ ipcMain.handle('test-websocket-connection', async () => {
       resolve({ success: false, error: error.message });
     }
   });
+});
+
+// Handle landmark data from renderer
+ipcMain.on('landmarks', (event, landmarkData) => {
+  // Send to Python stdin
+  if (pythonBackend.process && pythonBackend.isRunning) {
+    try {
+      pythonBackend.process.stdin.write(JSON.stringify(landmarkData) + '\n');
+    } catch (error) {
+      console.error('Failed to write to Python stdin:', error);
+    }
+  }
 });
 
 // Handle app shutdown

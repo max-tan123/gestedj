@@ -44,4 +44,4 @@ release/
 *.tsbuildinfo
 
 # ESLint cache
-.eslintcache
+.eslintcachepython-backend/venv/

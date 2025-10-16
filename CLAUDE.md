@@ -153,31 +153,33 @@ The system follows a **three-layer architecture**:
 
 ## Project Variants
 
-This project has **three implementations** of the same core gesture recognition system:
+This project has **two active implementations** of the same core gesture recognition system:
 
-### 1. Standalone Python App (`app.py`)
+### 1. Standalone Python App (`app.py`) ✅ Production Ready
 - **Purpose**: Original macOS desktop application
 - **Tech**: Pure Python with MediaPipe, OpenCV, rtmidi
 - **UI**: OpenCV window (always-on-top)
 - **Distribution**: PyInstaller builds macOS `.app` bundle
-- **Use Case**: Minimal dependencies, fastest to run
+- **Use Case**: Minimal dependencies, fastest to run, proven stable
 
-### 2. Web UI (`gestdj-web-ui/`)
-- **Purpose**: Browser-based interface with Python backend
-- **Tech**: React frontend + Python WebSocket backend
-- **Communication**: WebSocket on port 8765 for gesture data streaming
-- **Features**: Web-based UI, remote access capability
-- **Use Case**: Platform-independent, can run on remote server
-
-### 3. Electron Desktop App (`gestdj-electron/`)
+### 2. Electron Desktop App (`gestdj-electron/`) 🔄 In Development (Phase 2 Implementation Complete)
 - **Purpose**: Modern desktop app with native integration
 - **Tech**: Electron + React + TypeScript + Python subprocess
-- **Architecture**: Node.js main process manages Python backend, React frontend displays UI
-- **Communication**: IPC bridge + WebSocket for gesture data
+- **Architecture (Phase 2)**: Hybrid JS/Python
+  - **JavaScript**: Camera capture, MediaPipe hand detection (`@mediapipe/tasks-vision`), visualization
+  - **Python**: Gesture recognition logic (`gesture_processor.py`), MIDI virtual device creation
+  - **Data flow**: Camera → MediaPipe (JS) → Landmarks JSON → Gestures (Python) → MIDI
+- **Why Hybrid**: Web MIDI can't create virtual devices; landmarks are 100x smaller than frames
 - **Distribution**: Cross-platform installers (macOS DMG, Windows NSIS, Linux AppImage)
-- **Use Case**: Professional desktop experience with modern UI
+- **Status**: Phase 2 core implementation complete, debugging & testing in progress
+- **Next**: Debug end-to-end pipeline, add gesture overlay UI
 
-All three share the same core MediaPipe gesture recognition and MIDI device integration.
+### 3. ~~Web UI (`_deprecated_gestdj-web-ui/`)~~ ⚠️ DEPRECATED
+- **Status**: Deprecated in favor of Electron implementation
+- **Reason**: Electron provides better Python integration and native desktop features
+- **Note**: Code preserved for historical reference with `_deprecated_` prefix
+
+All implementations share the same core MediaPipe gesture recognition and MIDI device integration via symlinks or direct file usage.
 
 ## Dependencies
 

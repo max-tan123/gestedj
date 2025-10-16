@@ -9,10 +9,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPythonStatus: () => ipcRenderer.invoke('get-python-status'),
   testWebSocketConnection: () => ipcRenderer.invoke('test-websocket-connection'),
 
+  // Landmark communication
+  sendLandmarks: (landmarkData) => ipcRenderer.send('landmarks', landmarkData),
+
   // Event listeners
   onPythonLog: (callback) => ipcRenderer.on('python-log', callback),
   onPythonError: (callback) => ipcRenderer.on('python-error', callback),
   onPythonStatus: (callback) => ipcRenderer.on('python-status', callback),
+  onGestureUpdate: (callback) => ipcRenderer.on('gesture-update', callback),
 
   // Remove listeners
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),

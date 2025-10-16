@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './styles/App.css';
+import CameraFeed from './components/CameraFeed';
 
 function App() {
   const [pythonStatus, setPythonStatus] = useState<'running' | 'stopped' | 'unknown'>('unknown');
@@ -125,6 +126,29 @@ function App() {
       </header>
 
       <main className="app-main">
+        <section className="camera-section">
+          <h2>📷 Camera Feed</h2>
+          <CameraFeed onLandmarks={(results) => {
+            // Convert MediaPipe results to our landmark format
+            const landmarkData: any = {
+              type: 'landmarks',
+              timestamp: performance.now(),
+              hands: {}
+            };
+
+            // Map each detected hand to Left/Right
+            for (let i = 0; i < results.landmarks.length; i++) {
+              const handedness = results.handedness[i][0].categoryName;
+              landmarkData.hands[handedness] = results.landmarks[i];
+            }
+
+            // Send to main process
+            if (window.electronAPI) {
+              window.electronAPI.sendLandmarks(landmarkData);
+            }
+          }} />
+        </section>
+
         <section className="backend-control">
           <h2>🐍 Python Backend Control</h2>
 
